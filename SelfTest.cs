@@ -26,8 +26,8 @@ internal static class SelfTest
 
         var checks = new CheckList();
 
-        checks.Verify("assembly version is 1.2.6.0",
-            () => typeof(Program).Assembly.GetName().Version?.ToString() == "1.2.6.0");
+        checks.Verify("assembly version is 1.3.0.0",
+            () => typeof(Program).Assembly.GetName().Version?.ToString() == "1.3.0.0");
         checks.Verify("assembly targets the canonical .NET Framework runtime",
             () => typeof(Program).Assembly.ImageRuntimeVersion == "v4.0.30319");
         checks.Verify("embedded logo resource is present",
@@ -431,7 +431,7 @@ internal static class SelfTest
             return preview.Text == "VaultLoop" && preview.ClientSize.Width >= 780 &&
                    adminButtons.Length == 1 && adminButtons[0].Text == "ADMIN READY" &&
                    hudButtons.Length == 1 && hudButtons[0].Text == "HUD ON" &&
-                   versionLabels.Length == 1 && versionLabels[0].Text == "v1.2.6";
+                   versionLabels.Length == 1 && versionLabels[0].Text == "v1.3.0";
         });
         checks.Verify("the displayed version follows the assembly version",
             () => MainForm.VersionText == "v" + typeof(Program).Assembly
