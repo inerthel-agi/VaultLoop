@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+- Clarified the replay guidance for Cayo Perico and Kortz Center Heist. Repeating
+  either with the replay glitch resets the heist while keeping earned money and
+  losing the loot. The 144-minute cooldown applies only when the Cayo Perico loot
+  target changes. Other classic heists are not affected.
+
 ## 1.2.6
 
 - When GTA V is not running, **WAITING FOR GTA** is shown in red and **NO-SAVE**
