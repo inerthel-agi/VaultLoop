@@ -68,7 +68,7 @@ internal sealed class GuideDialog : BrutalistDialog
         {
             Bounds = new Rectangle(28, 120, 664 + SystemInformation.VerticalScrollBarWidth, 526),
             AutoScroll = true,
-            AutoScrollMinSize = new Size(0, 636),
+            AutoScrollMinSize = new Size(0, 666),
             BackColor = canvas,
             TabStop = false
         };
@@ -130,12 +130,13 @@ internal sealed class GuideDialog : BrutalistDialog
 
         scrollPanel.Controls.Add(new Label
         {
-            Text = "BONUS — ONE REPLAY GLITCH AT A TIME\n" +
-                   "After one successful replay glitch, do not attempt another consecutively. " +
-                   "For Cayo Perico, do not complete it twice within the 144-minute cooldown. " +
-                   "A second consecutive attempt resets the progress of any heist or activity, " +
-                   "but you keep the money already earned. This is expected behavior, not a bug.",
-            Bounds = new Rectangle(0, 390, 664, 88),
+            Text = "BONUS — CAYO PERICO / KORTZ CENTER HEIST\n" +
+                   "After your first Cayo Perico or Kortz Center replay glitch, repeating it resets the heist.\n" +
+                   "Money is kept, but loot is lost. The 144-minute cooldown applies only to a different loot target.\n" +
+                   "This is intentional Rockstar Games behavior, not a bug.\n" +
+                   "Not affected: Cluckin' Bell, The Titan Job, Avi Schwartzman Missions,\n" +
+                   "Casino, Doomsday, and other classic heists.",
+            Bounds = new Rectangle(0, 390, 664, 118),
             BackColor = Palette.Yellow,
             ForeColor = Palette.Ink,
             Font = Typography.SmallBold,
@@ -144,9 +145,9 @@ internal sealed class GuideDialog : BrutalistDialog
         scrollPanel.Controls.Add(new Label
         {
             Text = "TIP — COOLDOWN\n" +
-                   "Group heists: 48 minutes. Solo Cayo Perico: 144 minutes. " +
-                   "Other activities may use a different timer.",
-            Bounds = new Rectangle(0, 488, 664, 48),
+                   "144 minutes only when changing the Cayo Perico loot target. " +
+                   "Other activities use different timers.",
+            Bounds = new Rectangle(0, 518, 664, 48),
             BackColor = Palette.Blue,
             ForeColor = Palette.Ink,
             Font = Typography.SmallBold,
@@ -157,7 +158,7 @@ internal sealed class GuideDialog : BrutalistDialog
             Text = "WARNING — USE AT YOUR OWN RISK\n" +
                    "Online exploits may cause progress loss, transaction rollback, suspension, or account sanctions. " +
                    "The perceived risk may be low, but no method is completely risk-free.",
-            Bounds = new Rectangle(0, 546, 664, 78),
+            Bounds = new Rectangle(0, 576, 664, 78),
             BackColor = Palette.AlertRed,
             ForeColor = Palette.Ink,
             Font = Typography.StatusDetail,
