@@ -76,9 +76,11 @@ internal sealed class ServicesDiagnosticsForm : BrutalistDialog
             TabIndex = 3 };
         void Visit(string url)
         {
+            if (url != statusUrl && !VaultLoopFeed.IsProjectLink(url)) return;
             if (elevated)
             {
                 CopyText(url);
+                if (tabs.SelectedTab is OnlineServicesPage page) page.ShowLinkStatus(_status.Text);
                 return;
             }
             try
@@ -94,7 +96,12 @@ internal sealed class ServicesDiagnosticsForm : BrutalistDialog
         rockstar.LinkClicked += (_, _) => Visit(statusUrl);
         local.Controls.AddRange([reportLabel, _preview, historyLabel, hint, _history, _status,
             _refresh, rockstar, _copyEvents, _copy]);
-        tabs.TabPages.Add(local);
+        var online = new OnlineServicesPage(darkMode, elevated, Visit);
+        tabs.TabPages.AddRange([local, online]);
+        tabs.SelectedIndexChanged += (_, _) =>
+        {
+            if (tabs.SelectedTab == online) online.LoadSavedResults();
+        };
         Controls.Add(tabs);
         Shown += (_, _) => RefreshObservation();
     }
