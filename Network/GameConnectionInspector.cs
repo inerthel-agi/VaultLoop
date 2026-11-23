@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -8,8 +9,8 @@ namespace ReplayGlitchGTA;
 
 /// <summary>
 /// Reads the TCP connections owned by a process, so the effect of the managed firewall rule
-/// can be observed instead of assumed. A rule that reports <c>Active</c> while the game still
-/// holds an established connection inside the blocked set is not doing anything.
+/// can be observed instead of assumed. One snapshot cannot distinguish a connection that
+/// predates activation from a new connection through the active rule.
 /// </summary>
 /// <remarks>Read-only: this never opens, closes, or alters a connection.</remarks>
 internal static class GameConnectionInspector
@@ -23,16 +24,27 @@ internal static class GameConnectionInspector
     private const int InternetworkV6RowSize = 56;
     private const int MaximumResizeAttempts = 6;
 
-    internal static IReadOnlyList<GameConnection> GetConnections(int processId)
+    internal static IReadOnlyList<GameConnection> GetConnections(int processId) =>
+        ReadConnections(processId).Connections;
+
+    internal static ReadResult ReadConnections(int processId) =>
+        ReadConnections(processId, GetExtendedTcpTable);
+
+    // An explicit reader keeps error and retry tests independent of the live TCP table.
+    internal delegate int TcpTableReader(IntPtr buffer, ref int size, bool sortOrder,
+        int addressFamily, int tableClass, int reserved);
+
+    internal static ReadResult ReadConnections(int processId, TcpTableReader reader)
     {
         var connections = new List<GameConnection>();
-        ReadTable(AddressFamilyInternetwork, processId, connections);
-        ReadTable(AddressFamilyInternetworkV6, processId, connections);
-        return connections;
+        var ipv4Error = ReadTable(AddressFamilyInternetwork, processId, connections, reader);
+        var ipv6Error = ReadTable(AddressFamilyInternetworkV6, processId, connections, reader);
+        return new ReadResult(connections.AsReadOnly(), ipv4Error, ipv6Error);
     }
 
-    private static void ReadTable(
-        int addressFamily, int processId, ICollection<GameConnection> connections)
+    private static string? ReadTable(
+        int addressFamily, int processId, ICollection<GameConnection> connections,
+        TcpTableReader reader)
     {
         var bufferSize = 0;
         var buffer = IntPtr.Zero;
@@ -41,29 +53,33 @@ internal static class GameConnectionInspector
             for (var attempt = 0; attempt < MaximumResizeAttempts; attempt++)
             {
                 var allocatedSize = bufferSize;
-                var result = GetExtendedTcpTable(buffer, ref bufferSize, false,
+                var result = reader(buffer, ref bufferSize, false,
                     addressFamily, TcpTableOwnerPidAll, 0);
                 if (result == NoError && buffer != IntPtr.Zero)
                 {
-                    ReadRows(buffer, allocatedSize, addressFamily, processId, connections);
-                    return;
+                    return ReadRows(buffer, Math.Min(bufferSize, allocatedSize),
+                        addressFamily, processId, connections)
+                        ? null : "The TCP table was truncated or malformed.";
                 }
                 if (result != InsufficientBuffer || bufferSize <= 0)
                 {
-                    return;
+                    return result == NoError
+                        ? "Windows returned an invalid TCP table buffer."
+                        : $"Windows error {result}: {new Win32Exception(result).Message}";
                 }
 
                 if (buffer != IntPtr.Zero)
                 {
                     Marshal.FreeHGlobal(buffer);
+                    buffer = IntPtr.Zero;
                 }
                 buffer = Marshal.AllocHGlobal(bufferSize);
             }
+            return "The TCP table kept changing; the read retry limit was reached.";
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            // Diagnostics must never take the application down; an unreadable table is
-            // reported as "no connections" by the caller.
+            return $"{exception.GetType().Name}: {exception.Message}";
         }
         finally
         {
@@ -74,10 +90,14 @@ internal static class GameConnectionInspector
         }
     }
 
-    private static void ReadRows(
+    private static bool ReadRows(
         IntPtr buffer, int bufferSize, int addressFamily, int processId,
         ICollection<GameConnection> connections)
     {
+        if (bufferSize < sizeof(int))
+        {
+            return false;
+        }
         var entryCount = Marshal.ReadInt32(buffer);
         var isVersion6 = addressFamily == AddressFamilyInternetworkV6;
         var rowSize = isVersion6 ? InternetworkV6RowSize : InternetworkRowSize;
@@ -86,6 +106,7 @@ internal static class GameConnectionInspector
         // memory by hand inside an elevated process: clamp it to what was actually allocated
         // rather than trusting the header.
         var capacity = (bufferSize - sizeof(int)) / rowSize;
+        var complete = entryCount >= 0 && entryCount <= capacity;
         if (entryCount > capacity)
         {
             entryCount = capacity < 0 ? 0 : capacity;
@@ -115,6 +136,23 @@ internal static class GameConnectionInspector
             connections.Add(new GameConnection(
                 new IPAddress(addressBytes), remotePort, localPort, state));
         }
+        return complete;
+    }
+
+    internal sealed class ReadResult
+    {
+        internal ReadResult(IReadOnlyList<GameConnection> connections,
+            string? ipv4Error, string? ipv6Error)
+        {
+            Connections = connections;
+            Ipv4Error = ipv4Error;
+            Ipv6Error = ipv6Error;
+        }
+
+        internal IReadOnlyList<GameConnection> Connections { get; }
+        internal string? Ipv4Error { get; }
+        internal string? Ipv6Error { get; }
+        internal bool Complete => Ipv4Error is null && Ipv6Error is null;
     }
 
     /// <summary>Ports sit in the low half of a DWORD, in network byte order.</summary>

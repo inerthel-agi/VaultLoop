@@ -59,6 +59,10 @@ internal sealed class TrayMenu : ContextMenuStrip
     internal bool OpenEnabled => _openItem.Enabled;
     internal bool HideEnabled => _hideItem.Enabled;
 
+    internal void AddDiagnostics(Action open) =>
+        Items.Insert(Items.IndexOf(_hideItem) + 1,
+            CreateAction("SERVICES && DIAGNOSTICS", "TrayDiagnostics", open));
+
     internal void SetStatus(string status, Color color)
     {
         _statusItem.Text = $"STATUS  //  {status}";

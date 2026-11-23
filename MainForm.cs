@@ -116,6 +116,7 @@ internal sealed partial class MainForm : Form
         }
         else
         {
+            ActivityLog.Write("session started");
             RefreshRuntimeState(showErrors: true);
             _refreshTimer.Start();
         }
@@ -856,6 +857,10 @@ internal sealed partial class MainForm : Form
         try
         {
             _firewall.SetNoSaveEnabled(false);
+            if (_firewallState == FirewallRuleState.Active)
+            {
+                ActivityLog.Write("rule restored on close");
+            }
         }
         catch (Exception exception)
         {

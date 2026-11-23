@@ -83,6 +83,14 @@ the watchdog path, and the next launch when it finds a stale managed rule.
 
 ### Inspect the current state
 
+Open **Services & Diagnostics** from the tray menu for a timestamped local report.
+**Refresh** reads the verified game, firewall rule and IPv4/IPv6 tables again.
+Session history lists recorded events across launches, newest first. Select rows
+to include them in the preview, then use **Copy report** or **Copy events**.
+The copied text omits paths, addresses, process and device IDs, and raw exception
+messages. The Rockstar status link opens the official site on request. When
+VaultLoop runs as administrator, it copies the URL instead.
+
 Run:
 
 ```text
@@ -95,6 +103,13 @@ an Xbox controller shortcut is configured, it samples that controller for four
 seconds and prints every combination it reads, so a combination that does not match
 is visible. It does not change the firewall.
 
+The report distinguishes incomplete IPv4/IPv6 reads from an empty connection
+list. Existing connections may predate activation; a single report cannot confirm
+a leak. Other Rockstar endpoints are informational and do not justify expanding
+the blocked set. Exit code `0` means the diagnostic completed (also when no verified
+GTA process is found); `1` means a required firewall or TCP-table read is unavailable.
+Code `2` is reserved for a demonstrated leak and is not emitted by this snapshot.
+
 ### Validate a source build
 
 Run:
@@ -105,7 +120,8 @@ obj\preview\VaultLoop.exe --selftest
 ```
 
 The self-test prints `Result = PASS` and exits with code `0` when every check
-passes. It does not enable no-save or modify Windows Firewall.
+passes. It writes one labelled entry to `activity.log`, but does not enable no-save
+or modify Windows Firewall.
 
 ## Configuration
 

@@ -28,7 +28,8 @@ internal static class ActivityLog
     internal const string FileName = "activity.log";
 
     /// <summary>Enough to cover several sessions; the file stays well under 64 KB.</summary>
-    private const int MaximumEntries = 400;
+    internal const int MaximumEntries = 400;
+    internal const int MaximumFileBytes = 1024 * 1024;
 
     private const int MaximumMessageLength = 400;
 
@@ -93,15 +94,9 @@ internal static class ActivityLog
         }
         _loaded = true;
 
-        string? existing;
-        try
-        {
-            existing = AppSettingsStorage.ReadText(FileName, includeLegacy: false, out _);
-        }
-        catch
-        {
-            return;
-        }
+        // If an existing log cannot be read safely, let Write disable logging
+        // rather than replace that history with just the new session's first entry.
+        var existing = AppSettingsStorage.ReadBoundedCurrentText(FileName, MaximumFileBytes);
         if (existing is null)
         {
             return;

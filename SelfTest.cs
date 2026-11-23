@@ -410,6 +410,8 @@ internal static class SelfTest
                        exitItems[0].Text.Replace("&&", "&") == "EXIT & RESTORE";
             });
 
+        CheckServicesDiagnostics(checks);
+
         // Writes one labelled entry to the user's activity log. That is the whole point: the
         // log is the only trace a failed session leaves, so the path that writes it has to be
         // exercised rather than assumed.
@@ -419,7 +421,9 @@ internal static class SelfTest
             var contents = AppSettingsStorage.ReadText(
                 ActivityLog.FileName, includeLegacy: false, out _);
             return contents is not null &&
-                   contents.Contains("self-test entry with an embedded line break");
+                   contents.Contains("self-test entry with an embedded line break") &&
+                   Array.Exists(DiagnosticHistory.Read(), entry =>
+                       entry.EndsWith("  Self-test log check", StringComparison.Ordinal));
         });
 
         checks.Verify("the preview window builds with the expected chrome", () =>
@@ -474,6 +478,7 @@ internal static class SelfTest
 
         checks.Verify("the connection inspector runs without a game process",
             () => GameConnectionInspector.GetConnections(0) is not null);
+        VerifyConnectionObservations(checks);
         checks.Verify("the connection inspector reads IPv4 rows correctly",
             () => VerifyInspectorAgainstLiveSocket(AddressFamily.InterNetwork));
         checks.Verify("the connection inspector reads IPv6 rows correctly",
@@ -496,6 +501,188 @@ internal static class SelfTest
         var entries = new List<string>(commaSeparated.Split(','));
         entries.Reverse();
         return string.Join(",", entries);
+    }
+
+    private static void VerifyConnectionObservations(CheckList checks)
+    {
+        checks.Verify("empty TCP tables are complete observations", () =>
+        {
+            var read = ReadSyntheticTables(empty: true);
+            return read.Complete && read.Connections.Count == 0;
+        });
+        checks.Verify("a failed IPv6 read preserves IPv4 rows and the native error", () =>
+        {
+            var read = ReadSyntheticTables(ipv6Error: 5);
+            return !read.Complete && read.Ipv4Error is null &&
+                   read.Ipv6Error!.Contains("Windows error 5") &&
+                   read.Connections.Count == 1 && read.Connections[0].LocalPort == 5000;
+        });
+        checks.Verify("a truncated TCP table is not a successful empty observation",
+            () => !ReadSyntheticTables(truncated: true).Complete);
+        checks.Verify("TCP table resize retries stay bounded", () =>
+        {
+            var calls = 0;
+            int Read(IntPtr buffer, ref int size, bool sort, int family, int table, int reserved)
+            {
+                calls++;
+                size += 32;
+                return 122;
+            }
+            var read = GameConnectionInspector.ReadConnections(42, Read);
+            return calls == 12 && !read.Complete &&
+                   read.Ipv4Error!.Contains("retry limit") &&
+                   read.Ipv6Error!.Contains("retry limit");
+        });
+        checks.Verify("TCP reader exceptions become unavailable observations", () =>
+        {
+            int Read(IntPtr buffer, ref int size, bool sort, int family, int table, int reserved)
+            {
+                if (buffer == IntPtr.Zero)
+                {
+                    size = 4;
+                    return 122;
+                }
+                throw new InvalidOperationException("synthetic read failure");
+            }
+            var read = GameConnectionInspector.ReadConnections(42, Read);
+            return !read.Complete && read.Ipv4Error!.Contains("synthetic read failure") &&
+                   read.Ipv6Error!.Contains("synthetic read failure");
+        });
+
+        checks.Verify("a snapshot of an established blocked connection is not a confirmed leak", () =>
+        {
+            var address = IPAddress.Parse(RockstarNetworks.BlockedSet[0].Canonical.Split('/')[0]);
+            var read = new GameConnectionInspector.ReadResult(
+                [new GameConnection(address, 443, 5000, TcpConnectionState.Established)], null, null);
+            var report = new StringBuilder();
+            return DiagnosticsReport.Summarize(report, FirewallRuleState.Active, read) == 0 &&
+                   report.ToString().Contains("may predate activation") &&
+                   !report.ToString().Contains("WARNING");
+        });
+        checks.Verify("an incomplete diagnostic returns 1 without a positive verdict", () =>
+        {
+            var report = new StringBuilder();
+            var code = DiagnosticsReport.Summarize(report, FirewallRuleState.Active,
+                ReadSyntheticTables(ipv6Error: 5));
+            return code == 1 && report.ToString().Contains("IPv6 read unavailable") &&
+                   !report.ToString().Contains("No established connection inside");
+        });
+        checks.Verify("no GTA is a completed diagnostic, but unreadable firewall state is not", () =>
+        {
+            var report = new StringBuilder();
+            return DiagnosticsReport.Summarize(report, FirewallRuleState.Inactive, null) == 0 &&
+                   report.ToString().Contains("Start GTA V") &&
+                   DiagnosticsReport.Summarize(new StringBuilder(), null, null) == 1;
+        });
+        checks.Verify("a complete empty snapshot does not claim saves are blocked", () =>
+        {
+            var report = new StringBuilder();
+            return DiagnosticsReport.Summarize(report, FirewallRuleState.Active,
+                       ReadSyntheticTables(empty: true)) == 0 &&
+                   report.ToString().Contains("does not prove that saves are blocked");
+        });
+    }
+
+    private static void CheckServicesDiagnostics(CheckList checks)
+    {
+        checks.Verify("the diagnostics tray action opens one panel while the owner stays hidden", () =>
+        {
+            using var owner = new MainForm(null, previewMode: true);
+            using var menu = owner.CreateTrayMenu();
+            var item = menu.Items["TrayDiagnostics"]!;
+            item.PerformClick();
+            item.PerformClick();
+            if (owner.Visible || owner.OwnedForms.Length != 1 ||
+                owner.OwnedForms[0] is not ServicesDiagnosticsForm first || !first.Visible)
+                return false;
+            first.Close();
+            item.PerformClick();
+            return first.IsDisposed && owner.OwnedForms.Length == 1 && owner.OwnedForms[0].Visible;
+        });
+        checks.Verify("no verified game is distinct from a successful empty TCP read", () =>
+        {
+            var absent = new LocalDiagnosticSnapshot(null, null, 0, "", null).FormatForSupport();
+            var empty = new LocalDiagnosticSnapshot(FirewallRuleState.Inactive, null, 42,
+                "GTA5.exe", ReadSyntheticTables(empty: true)).FormatForSupport();
+            return absent.Contains("Game: No verified GTA process") &&
+                   absent.Contains("Windows Firewall rule: Unavailable") &&
+                   absent.Contains("TCP IPv4: Not read") && empty.Contains("TCP IPv6: Available (0 connections)");
+        });
+        checks.Verify("history keeps the newest 400 valid timestamps without exporting free text", () =>
+        {
+            var log = new StringBuilder();
+            log.AppendLine("2026-07-01 00:00:00Z  pid 7       session started");
+            for (var i = 0; i < ActivityLog.MaximumEntries; i++)
+                log.AppendLine("2026-07-02 00:00:00Z  pid 7       endpoint configuration refused: 203.0.113.7");
+            log.AppendLine("invalid-date  pid 7       session started");
+            var events = DiagnosticHistory.Format(log.ToString());
+            return events.Length == ActivityLog.MaximumEntries && Array.TrueForAll(events,
+                e => e == "2026-07-02 00:00:00Z  Endpoint configuration rejected");
+        });
+        checks.Verify("selected safe history and the displayed report are exactly what is copied", () =>
+        {
+            const string secret = @"C:\Users\Private\GTA5_Enhanced.exe";
+            var rows = DiagnosticHistory.Format(
+                $"2026-07-29 09:00:00Z  pid 87465   no-save enabled from window for {secret}\r\n" +
+                $"2026-07-29 09:01:00Z  pid 87465   restore on close failed: {secret}\n" +
+                $"2026-07-29 09:02:00Z  pid 87465   {secret}\nmalformed line\n");
+            if (rows.Length != 3 || !rows[0].EndsWith("Other recorded event") ||
+                !rows[1].EndsWith("Restore on close failed") || !rows[2].EndsWith("Rule enabled from window"))
+                return false;
+            var read = new GameConnectionInspector.ReadResult(
+                [new GameConnection(IPAddress.Parse("203.0.113.7"), 443, 53210, TcpConnectionState.Established)],
+                null, "HID-PRIVATE-ID " + secret);
+            var observation = new LocalDiagnosticSnapshot(null, new Exception(secret), 87465, secret, read);
+            string? copied = null;
+            using var panel = new ServicesDiagnosticsForm(false, value => copied = value);
+            panel.Show();
+            panel.Display(observation, rows);
+            var preview = (TextBox)panel.Controls.Find("ReportPreview", true)[0];
+            var list = (ListBox)panel.Controls.Find("SessionHistory", true)[0];
+            var events = (Button)panel.Controls.Find("CopyEvents", true)[0];
+            if (events.Enabled) return false;
+            list.SetSelected(1, true);
+            list.SetSelected(2, true);
+            events.PerformClick();
+            if (copied != rows[1] + Environment.NewLine + rows[2]) return false;
+            ((Button)panel.Controls.Find("CopyReport", true)[0]).PerformClick();
+            return copied == preview.Text && copied.Contains("TCP IPv4: Available (1 connection)") &&
+                   copied.Contains("TCP IPv6: Read incomplete") && copied.Contains(rows[1]) &&
+                   copied.Contains(rows[2]) && !copied.Contains(rows[0]) && !copied.Contains("Private") &&
+                   !copied.Contains("203.0.113.7") && !copied.Contains("87465") && !copied.Contains("HID-");
+        });
+    }
+
+    private static GameConnectionInspector.ReadResult ReadSyntheticTables(
+        bool empty = false, int ipv6Error = 0, bool truncated = false)
+    {
+        int Read(IntPtr buffer, ref int size, bool sort, int family, int table, int reserved)
+        {
+            if (family == 23 && ipv6Error != 0)
+            {
+                return ipv6Error;
+            }
+            var hasRow = !empty && family == 2;
+            var required = hasRow && !truncated ? 28 : 4;
+            if (buffer == IntPtr.Zero || size < required)
+            {
+                size = required;
+                return 122;
+            }
+            size = required;
+            Marshal.Copy(new byte[required], 0, buffer, required);
+            Marshal.WriteInt32(buffer, hasRow ? 1 : 0);
+            if (hasRow && !truncated)
+            {
+                Marshal.WriteInt32(buffer, 4, (int)TcpConnectionState.Established);
+                Marshal.WriteInt32(buffer, 12, 0x8813); // local port 5000 in network order
+                Marshal.Copy(new byte[] { 192, 81, 241, 171 }, 0, IntPtr.Add(buffer, 16), 4);
+                Marshal.WriteInt32(buffer, 20, 0xBB01); // remote port 443
+                Marshal.WriteInt32(buffer, 24, 42);
+            }
+            return 0;
+        }
+        return GameConnectionInspector.ReadConnections(42, Read);
     }
 
     /// <summary>

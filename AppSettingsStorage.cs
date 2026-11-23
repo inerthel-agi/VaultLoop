@@ -9,6 +9,30 @@ internal static class AppSettingsStorage
     private const string CurrentDirectoryName = "VaultLoop";
     private const string LegacyDirectoryName = "ReplayGlitchGTA";
 
+    internal static string? ReadBoundedCurrentText(string fileName, int maximumBytes)
+    {
+        var path = GetPath(CurrentDirectoryName, fileName);
+        var directory = Path.GetDirectoryName(path)!;
+        try
+        {
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new IOException("The VaultLoop settings directory cannot be a reparse point.");
+            }
+            EnsureNotReparsePoint(path);
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read | FileShare.Delete);
+            if (file.Length > maximumBytes)
+            {
+                throw new IOException("The diagnostic history exceeds its size limit.");
+            }
+            using var reader = new StreamReader(file, Encoding.UTF8);
+            return reader.ReadToEnd();
+        }
+        catch (DirectoryNotFoundException) { return null; }
+        catch (FileNotFoundException) { return null; }
+    }
+
     internal static string? ReadText(string fileName, bool includeLegacy, out bool fromLegacy)
     {
         fromLegacy = false;
