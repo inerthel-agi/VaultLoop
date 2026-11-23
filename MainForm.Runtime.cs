@@ -256,6 +256,11 @@ internal sealed partial class MainForm
     private void ApplyGameContext(
         string? foregroundPath, IntPtr foregroundWindow, string? runningPath)
     {
+        var gameDetected = foregroundPath is not null || runningPath is not null;
+        if (!_previewMode && gameDetected != (_verifiedGamePath is not null))
+        {
+            ActivityLog.Write(gameDetected ? "verified game detected" : "verified game no longer detected");
+        }
         _hasVerifiedForegroundGame = foregroundPath is not null;
         UpdateHudVisibility();
         if (foregroundPath is not null)

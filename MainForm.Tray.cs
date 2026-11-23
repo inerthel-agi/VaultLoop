@@ -9,6 +9,7 @@ internal sealed partial class MainForm
     private NotifyIcon? _trayIcon;
     private TrayMenu? _trayMenu;
     private bool _trayHintShown;
+    private ServicesDiagnosticsForm? _diagnostics;
 
     internal void StartInTray()
     {
@@ -25,9 +26,7 @@ internal sealed partial class MainForm
 
     private void InitializeTray()
     {
-        _trayMenu = new TrayMenu(
-            ShowFromTray, HideToTray, ToggleHudVisibility,
-            ToggleStartWithWindows, ExitFromTray);
+        _trayMenu = CreateTrayMenu();
         _trayMenu.SetHudEnabled(_hudEnabled);
         _trayMenu.SetStartupEnabled(
             StartupRegistration.IsEnabled(Application.ExecutablePath));
@@ -50,6 +49,24 @@ internal sealed partial class MainForm
                 ShowFromTray();
             }
         };
+    }
+
+    internal TrayMenu CreateTrayMenu()
+    {
+        var menu = new TrayMenu(ShowFromTray, HideToTray, ToggleHudVisibility,
+            ToggleStartWithWindows, ExitFromTray);
+        menu.AddDiagnostics(OpenDiagnostics);
+        return menu;
+    }
+
+    private void OpenDiagnostics()
+    {
+        if (_diagnostics is null || _diagnostics.IsDisposed)
+        {
+            _diagnostics = new ServicesDiagnosticsForm(_darkMode);
+            _diagnostics.Show(this);
+        }
+        _diagnostics.Activate();
     }
 
     private void ToggleStartWithWindows()

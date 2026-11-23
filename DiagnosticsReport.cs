@@ -8,8 +8,8 @@ namespace ReplayGlitchGTA;
 
 /// <summary>
 /// The <c>--diagnose</c> command. Reports what the managed rule blocks, what the firewall
-/// currently holds, and which endpoints the verified game is actually talking to, so that an
-/// <c>Active</c> state can be confirmed rather than trusted.
+/// currently holds, and which endpoints the verified game is actually talking to.
+/// A single observation cannot establish whether a connection predates activation.
 /// </summary>
 /// <remarks>
 /// Read-only. It reads firewall state and the TCP table; it never creates, modifies, or
@@ -17,7 +17,7 @@ namespace ReplayGlitchGTA;
 /// </remarks>
 internal static class DiagnosticsReport
 {
-    private const int LeakingConnectionExitCode = 2;
+    private const int UnavailableReadExitCode = 1;
     private const int XInputSlots = 4;
     private const int SampleMilliseconds = 4000;
     private const int SampleIntervalMilliseconds = 30;
@@ -40,12 +40,20 @@ internal static class DiagnosticsReport
         {
             report.AppendLine($"  NOTE: {configurationError}");
         }
+        report.AppendLine("  Check save outcomes in GTA; this report cannot verify a replay procedure.");
         report.AppendLine();
 
-        var ruleState = ReadRuleState(report);
+        var snapshot = LocalDiagnosticSnapshot.Read();
+        report.AppendLine("Firewall");
+        report.AppendLine(snapshot.RuleState.HasValue
+            ? $"  Managed rule state : {snapshot.RuleState}"
+            : $"  Managed rule state : unavailable ({snapshot.FirewallError?.Message})");
+        report.AppendLine();
         ReadControllerState(report);
-        var connections = ReadGameConnections(report);
-        return Summarize(report, ruleState, connections);
+        WriteGameConnections(report, snapshot);
+        var exitCode = Summarize(report, snapshot.RuleState, snapshot.Connections);
+        Console.WriteLine(report.ToString());
+        return exitCode;
     }
 
     /// <summary>
@@ -250,28 +258,10 @@ internal static class DiagnosticsReport
         return true;
     }
 
-    private static FirewallRuleState? ReadRuleState(StringBuilder report)
-    {
-        report.AppendLine("Firewall");
-        try
-        {
-            var state = new FirewallService().GetState();
-            report.AppendLine($"  Managed rule state : {state}");
-            report.AppendLine();
-            return state;
-        }
-        catch (Exception exception)
-        {
-            report.AppendLine($"  Managed rule state : unavailable ({exception.Message})");
-            report.AppendLine();
-            return null;
-        }
-    }
-
-    private static IReadOnlyList<GameConnection>? ReadGameConnections(StringBuilder report)
+    private static void WriteGameConnections(StringBuilder report, LocalDiagnosticSnapshot snapshot)
     {
         report.AppendLine("Game process");
-        if (!GameProcessService.TryGetVerifiedGameProcess(out var processId, out var path))
+        if (snapshot.Connections is null)
         {
             report.AppendLine("  None. No verified Rockstar GTA V process is running.");
             report.AppendLine();
@@ -281,20 +271,20 @@ internal static class DiagnosticsReport
                 report.AppendLine($"  {line}");
             }
             report.AppendLine();
-            return null;
+            return;
         }
 
-        report.AppendLine($"  {Path.GetFileName(path)} (pid {processId})");
-        report.AppendLine($"  {path}");
+        report.AppendLine($"  {Path.GetFileName(snapshot.GamePath)} (pid {snapshot.ProcessId})");
+        report.AppendLine($"  {snapshot.GamePath}");
         report.AppendLine();
 
-        var connections = GameConnectionInspector.GetConnections(processId);
+        var connections = snapshot.Connections.Connections;
         report.AppendLine("Connections owned by the game");
         if (connections.Count == 0)
         {
             report.AppendLine("  None observed.");
             report.AppendLine();
-            return connections;
+            return;
         }
 
         report.AppendLine("  STATE         ENDPOINT                                    NETWORK        BLOCK SET");
@@ -309,31 +299,49 @@ internal static class DiagnosticsReport
                 $"  {connection.State,-13} {connection.Endpoint,-43} {network,-14} {inBlockSet}");
         }
         report.AppendLine();
-        return connections;
     }
 
-    private static int Summarize(
+    internal static int Summarize(
         StringBuilder report, FirewallRuleState? ruleState,
-        IReadOnlyList<GameConnection>? connections)
+        GameConnectionInspector.ReadResult? observation)
     {
         report.AppendLine("Verdict");
-        var exitCode = 0;
+        report.AppendLine(
+            "  ACTIVE describes the Windows rule, not proof that Rockstar saves fail.");
+        var exitCode = ruleState is null || observation is { Complete: false }
+            ? UnavailableReadExitCode : 0;
+        if (ruleState is null)
+        {
+            report.AppendLine("  Firewall state is unavailable; no effectiveness verdict is possible.");
+        }
+        if (observation is { Complete: false })
+        {
+            if (observation.Ipv4Error is { } ipv4Error)
+            {
+                report.AppendLine($"  IPv4 read unavailable: {ipv4Error}");
+            }
+            if (observation.Ipv6Error is { } ipv6Error)
+            {
+                report.AppendLine($"  IPv6 read unavailable: {ipv6Error}");
+            }
+            report.AppendLine("  Observations are incomplete; absence of connections proves nothing.");
+        }
 
-        if (connections is null)
+        if (observation is null)
         {
             report.AppendLine(
                 "  Start GTA V and rerun this command to observe its endpoints.");
         }
         else
         {
-            var leaking = new List<GameConnection>();
+            var established = new List<GameConnection>();
             var uncovered = new List<GameConnection>();
-            foreach (var connection in connections)
+            foreach (var connection in observation.Connections)
             {
                 var isBlockedAddress = RockstarNetworks.IsBlocked(connection.RemoteAddress);
                 if (isBlockedAddress && connection.State == TcpConnectionState.Established)
                 {
-                    leaking.Add(connection);
+                    established.Add(connection);
                 }
                 else if (!isBlockedAddress &&
                          RockstarNetworks.GetOnlineServiceName(connection.RemoteAddress) is not null)
@@ -342,47 +350,38 @@ internal static class DiagnosticsReport
                 }
             }
 
-            if (ruleState == FirewallRuleState.Active && leaking.Count > 0)
+            if (ruleState == FirewallRuleState.Active && established.Count > 0)
             {
                 report.AppendLine(
-                    "  WARNING: the rule reports Active, but the game holds an established");
+                    "  OBSERVATION: the rule reports Active and the game holds an established");
                 report.AppendLine("  connection inside the blocked set:");
-                foreach (var connection in leaking)
+                foreach (var connection in established)
                 {
                     report.AppendLine(
                         $"    {connection.Endpoint}  (local port {connection.LocalPort})");
                 }
                 report.AppendLine();
-                report.AppendLine(
-                    "  A block rule does not tear down a flow that was already open, so this is");
-                report.AppendLine(
-                    "  expected shortly after enabling no-save. It only proves the block is");
-                report.AppendLine(
-                    "  ineffective if the local port changes between two runs of this command,");
-                report.AppendLine(
-                    "  which means the game completed a new handshake through the active rule.");
-                exitCode = LeakingConnectionExitCode;
+                report.AppendLine("  These connections may predate activation. This single observation");
+                report.AppendLine("  cannot confirm a leak or the outcome of a cloud save.");
             }
-            else if (ruleState == FirewallRuleState.Active)
+            else if (ruleState == FirewallRuleState.Active && observation.Complete)
+            {
+                report.AppendLine("  No established connection inside the blocked set was observed.");
+                report.AppendLine("  This does not prove that saves are blocked.");
+            }
+            else if (ruleState != FirewallRuleState.Active)
             {
                 report.AppendLine(
-                    "  The rule is Active and no established connection remains inside the");
-                report.AppendLine("  blocked set.");
-            }
-            else
-            {
-                report.AppendLine(
-                    $"  The managed rule is {(ruleState is null ? "unreadable" : ruleState.ToString())};" +
-                    " the connections above are the unblocked baseline.");
+                    $"  Managed rule state: {(ruleState is null ? "unreadable" : ruleState.ToString())}.");
             }
 
             if (uncovered.Count > 0)
             {
                 report.AppendLine();
                 report.AppendLine(
-                    "  Rockstar endpoints outside the blocked set — candidates to widen the set,");
+                    "  Rockstar endpoints outside the blocked set (information only):");
                 report.AppendLine(
-                    "  bearing in mind that blocking session traffic ends the online session:");
+                    "  Their presence does not identify a save service or justify blocking them.");
                 foreach (var connection in uncovered)
                 {
                     var network = RockstarNetworks.GetOnlineServiceName(connection.RemoteAddress);
@@ -392,7 +391,6 @@ internal static class DiagnosticsReport
         }
 
         report.AppendLine();
-        Console.WriteLine(report.ToString());
         return exitCode;
     }
 }
