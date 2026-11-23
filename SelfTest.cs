@@ -411,6 +411,7 @@ internal static class SelfTest
             });
 
         CheckServicesDiagnostics(checks);
+        CheckOnlineServices(checks);
 
         // Writes one labelled entry to the user's activity log. That is the whole point: the
         // log is the only trace a failed session leaves, so the path that writes it has to be
@@ -580,6 +581,80 @@ internal static class SelfTest
             return DiagnosticsReport.Summarize(report, FirewallRuleState.Active,
                        ReadSyntheticTables(empty: true)) == 0 &&
                    report.ToString().Contains("does not prove that saves are blocked");
+        });
+    }
+
+    private static void CheckOnlineServices(CheckList checks)
+    {
+        var installed = new Version(1, 3, 0, 0);
+        var today = new DateTime(2026, 11, 23);
+        const string validRelease = """{"tag_name":"v1.3.10","draft":false,"prerelease":false}""";
+        checks.Verify("stable release comparisons use all three numeric parts", () =>
+        {
+            string Compare(Version version) => VaultLoopFeed.Format(FeedKind.Release, validRelease, version, today);
+            return Compare(new Version(1, 3, 9)).Contains("Update available") &&
+                   Compare(new Version(1, 3, 10, 0)).Contains("Up to date") &&
+                   Compare(new Version(1, 4, 0)).Contains("Installed version is newer") &&
+                   Compare(installed).Contains(VaultLoopFeed.ProjectUrl + "releases/tag/v1.3.10");
+        });
+        checks.Verify("offline release checks retain the last valid stable response and its timestamp", () =>
+        {
+            string? cache = null;
+            var feed = new VaultLoopFeed(FeedKind.Release);
+            var offlineReads = 0;
+            string Read(VaultLoopFeed source, bool online, Func<string> fetch) =>
+                source.Read(online, installed, default, () => cache, body => cache = body, fetch);
+            var empty = Read(feed, false, () => { offlineReads++; return validRelease; });
+            var fresh = Read(feed, true, () => validRelease);
+            var saved = cache;
+            var restarted = new VaultLoopFeed(FeedKind.Release);
+            var cached = Read(restarted, false, () => { offlineReads++; return ""; });
+            foreach (var bad in new[] { "not JSON", "{}", validRelease.Replace("false", "true"),
+                         validRelease.Replace("v1.3.10", "v1.3.10-beta") })
+            {
+                var result = Read(restarted, true, () => bad);
+                if (!result.Contains("unsuccessful") || !result.Contains("v1.3.10") || cache != saved)
+                    return false;
+            }
+            var unavailable = Read(restarted, true, () => throw new System.Net.WebException());
+            return offlineReads == 0 && empty.Contains("unknown") && saved is not null &&
+                   cached == fresh && unavailable.Contains(fresh);
+        });
+        checks.Verify("compatibility notices filter inclusive version ranges and label expired data", () =>
+        {
+            const string body = """
+                {"schema":1,"validThrough":"2027-02-28","notices":[
+                  {"min":"1.2.5","max":"1.3.0","verified":"2026-11-23","summary":"Broad notice",
+                   "reference":"https://github.com/inerthel-agi/VaultLoop/issues/1"},
+                  {"min":"1.2.5","max":"1.2.5","verified":"2026-11-23","summary":"Patch notice",
+                   "reference":"https://github.com/inerthel-agi/VaultLoop/issues/1"}]}
+                """;
+            string Show(Version version, DateTime date) =>
+                VaultLoopFeed.Format(FeedKind.Compatibility, body, version, date);
+            return Show(installed, today).Contains("Broad notice") &&
+                   !Show(installed, today).Contains("Patch notice") &&
+                   Show(new Version(1, 2, 5), today).Contains("Patch notice") &&
+                   Show(new Version(8, 0, 0), today).Contains("No entries") &&
+                   Show(installed, today.AddYears(5)).Contains("EXPIRED");
+        });
+        checks.Verify("invalid advisories preserve the bundled fallback and never enable an external link", () =>
+        {
+            var written = false;
+            var result = new VaultLoopFeed(FeedKind.Compatibility).Read(true, installed, default,
+                () => "damaged cache", _ => written = true, () => VaultLoopFeed.BundledCatalog()
+                    .Replace("https://github.com/", "https://untrusted.invalid/"));
+            return !written && result.Contains("unsuccessful") && result.Contains("included with VaultLoop") &&
+                   !result.Contains("untrusted") && !VaultLoopFeed.IsProjectLink("file:///C:/example") &&
+                   !VaultLoopFeed.IsProjectLink("https://github.com/other/project/issues/10");
+        });
+        checks.Verify("online services are available beside the local diagnostics", () =>
+        {
+            using var dialog = new ServicesDiagnosticsForm(false);
+            dialog.Show();
+            var tabs = (TabControl)dialog.Controls.Find("DiagnosticTabs", true)[0];
+            return tabs.SelectedIndex == 0 && tabs.TabPages.Count == 2 &&
+                   tabs.TabPages[1].Controls["CheckRelease"] is Button &&
+                   tabs.TabPages[1].Controls["CheckCompatibility"] is Button;
         });
     }
 

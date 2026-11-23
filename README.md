@@ -91,6 +91,17 @@ The copied text omits paths, addresses, process and device IDs, and raw exceptio
 messages. The Rockstar status link opens the official site on request. When
 VaultLoop runs as administrator, it copies the URL instead.
 
+In **Online services**, **Check for updates** compares the installed version
+with the latest stable GitHub release and links to its notes. **Refresh notices**
+retrieves the project's [compatibility catalog](docs/compatibility.json). Each
+matching notice lists the affected versions, verification date and reference.
+An expired catalog is labelled **EXPIRED**.
+
+Both commands contact GitHub only when selected. The tab can display the last
+successful check and its UTC timestamp offline. The bundled compatibility
+catalog is available on first launch. To see GTA Online PC availability, open
+[Rockstar Service Status](https://support.rockstargames.com/servicestatus).
+
 Run:
 
 ```text
