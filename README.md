@@ -20,12 +20,12 @@ and an optional HUD.
 
 Build the current revision:
 ```text
-git clone https://github.com/stealthsrc/VaultLoop.git
+git clone https://github.com/inerthel-agi/VaultLoop.git
 cd VaultLoop
 dotnet build ReplayGlitchGTA.csproj -c Release -t:Ship
 ```
 
-Published binaries are listed in [GitHub releases](https://github.com/stealthsrc/VaultLoop/releases).
+Published binaries are listed in [GitHub releases](https://github.com/inerthel-agi/VaultLoop/releases).
 Each binary matches its tag and may not include changes from this branch.
 
 The `Ship` target writes `publish\VaultLoop.exe`. Before running it with
@@ -50,8 +50,20 @@ The timestamp server defaults to `https://timestamp.digicert.com`; override it w
 4. Enable no-save with the on-screen control, the keyboard shortcut, or a
    configured controller shortcut.
 5. Confirm that VaultLoop displays `ACTIVE`.
-6. Complete the activity and wait until Story Mode has fully loaded.
-7. Disable no-save and confirm `INACTIVE` before returning to GTA Online.
+6. Complete the activity, leave for Story Mode, and wait until Story Mode has
+   fully loaded.
+7. Disable no-save and confirm `INACTIVE`.
+8. Rejoin GTA Online in an **Invite Only** or **Friends Only** session (not
+   public).
+9. With no-save inactive, check the save result in GTA. An outfit change or
+   Alt+F4 does not guarantee a successful cloud save.
+10. Check your progress and activity availability before attempting another
+    replay. A further Story Mode/private-session cycle does not guarantee a reset.
+
+This replay procedure has not been validated by this audit for Cayo Perico,
+Kortz Center, or any other activity. `ACTIVE` confirms the Windows rule, not a
+failed cloud save or retained rewards. VaultLoop cannot attribute a progress
+loss to a specific cause. See **HOW TO USE** for the observation checklist.
 
 The default keyboard shortcut is `CTRL+SHIFT+F8`. Keyboard and controller
 shortcuts trigger only while a verified GTA window is in the foreground.
@@ -173,6 +185,11 @@ when an entry is invalid or outside those allocations.
   or a specific GTA update will behave.
 - A firewall block does not close an existing TCP connection. Diagnostics must
   distinguish an existing flow from a new connection created after activation.
+- Runtime alerts compare complete observations with the first complete baseline
+  for that activation and process lifetime. They require two consecutive readings;
+  two complete readings without a new connection rearm the alert. Missing readings
+  interrupt confirmation without replacing the baseline. Connections before the
+  baseline, reused local ports, and connections between readings can escape detection.
 - A total power loss can prevent immediate cleanup. The next launch checks for a
   stale managed rule and attempts to remove it.
 - Moving `VaultLoop.exe` after enabling **START WITH WINDOWS** leaves the stored

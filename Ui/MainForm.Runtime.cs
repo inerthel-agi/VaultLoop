@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 
 namespace ReplayGlitchGTA;
@@ -17,9 +18,7 @@ internal sealed partial class MainForm
     private int _runtimeRefreshInProgress;
     private int _runtimeRefreshVersion;
     private int _missingGameTicks;
-    private int _leakingTicks;
-    private bool _leakReported;
-    private HashSet<int>? _blockedPortsAtActivation;
+    private readonly BlockObservationState _blockObservation = new();
 
     private void QueueRuntimeRefresh()
     {
@@ -87,7 +86,22 @@ internal sealed partial class MainForm
         if (snapshot.FirewallState == FirewallRuleState.Active &&
             GameProcessService.TryGetVerifiedGameProcess(out var processId, out _))
         {
-            snapshot.BlockedLocalPorts = ReadBlockedLocalPorts(processId);
+            try
+            {
+                using var process = Process.GetProcessById(processId);
+                var identity = $"{processId}:{process.StartTime.ToUniversalTime().Ticks}";
+                var ports = ReadBlockedLocalPorts(processId);
+                if (!process.HasExited)
+                {
+                    snapshot.ProcessIdentity = identity;
+                    snapshot.BlockedLocalPorts = ports;
+                }
+            }
+            catch (Exception)
+            {
+                // Missing observation, not evidence that GTA disappeared. Game-loss
+                // recovery still uses only the verified context collected above.
+            }
         }
         return snapshot;
     }
@@ -97,10 +111,15 @@ internal sealed partial class MainForm
     /// this set across ticks tells an already-open flow — which a new block rule does not tear
     /// down — apart from a flow that completed its handshake through the active rule.
     /// </summary>
-    private static HashSet<int> ReadBlockedLocalPorts(int processId)
+    private static HashSet<int>? ReadBlockedLocalPorts(int processId)
     {
+        var result = GameConnectionInspector.ReadConnections(processId);
+        if (!result.Complete)
+        {
+            return null;
+        }
         var ports = new HashSet<int>();
-        foreach (var connection in GameConnectionInspector.GetConnections(processId))
+        foreach (var connection in result.Connections)
         {
             if (connection.State == TcpConnectionState.Established &&
                 RockstarNetworks.IsBlocked(connection.RemoteAddress))
@@ -142,49 +161,83 @@ internal sealed partial class MainForm
     /// </summary>
     private void EvaluateBlockEffectiveness(RuntimeSnapshot snapshot)
     {
-        if (_firewallState != FirewallRuleState.Active || snapshot.BlockedLocalPorts is null)
-        {
-            _blockedPortsAtActivation = null;
-            _leakingTicks = 0;
-            _leakReported = false;
-            return;
-        }
-
-        if (_blockedPortsAtActivation is null)
-        {
-            _blockedPortsAtActivation = snapshot.BlockedLocalPorts;
-            return;
-        }
-
-        var hasNewConnection = false;
-        foreach (var localPort in snapshot.BlockedLocalPorts)
-        {
-            if (!_blockedPortsAtActivation.Contains(localPort))
-            {
-                hasNewConnection = true;
-                break;
-            }
-        }
-
-        if (!hasNewConnection)
-        {
-            _leakingTicks = 0;
-            return;
-        }
-
-        _leakingTicks++;
-        if (_leakingTicks < LeakingTicksBeforeWarning || _leakReported)
+        if (!_blockObservation.Observe(snapshot.FirewallState,
+                snapshot.ProcessIdentity, snapshot.BlockedLocalPorts))
         {
             return;
         }
 
-        _leakReported = true;
         ActivityLog.Write(
             "the rule is active but the game opened a new connection to a blocked address");
         SetGameStatus("BLOCK NOT EFFECTIVE", Palette.HotPink);
         ShowStatusToast("BLOCK NOT EFFECTIVE", Palette.Yellow,
-            "The rule is active but GTA opened a new connection to a blocked address. " +
-            "Run --diagnose to see the endpoints in use.");
+            "New GTA connection to a blocked address. Run --diagnose for details.");
+    }
+
+    /// <summary>
+    /// Tracks one known activation and process lifetime. Incomplete observations cannot
+    /// replace the first complete baseline or count towards either confirmation window.
+    /// </summary>
+    internal sealed class BlockObservationState
+    {
+        private string? _processIdentity;
+        private HashSet<int>? _baseline;
+        private int _leakingTicks;
+        private int _cleanTicks;
+        private bool _reported;
+
+        internal void Reset()
+        {
+            _processIdentity = null;
+            _baseline = null;
+            _leakingTicks = 0;
+            _cleanTicks = 0;
+            _reported = false;
+        }
+
+        internal bool Observe(FirewallRuleState? state, string? processIdentity,
+            HashSet<int>? ports)
+        {
+            if (state != FirewallRuleState.Active)
+            {
+                Reset();
+                return false;
+            }
+            if (processIdentity is not null && processIdentity != _processIdentity)
+            {
+                Reset();
+                _processIdentity = processIdentity;
+            }
+            if (processIdentity is null || ports is null)
+            {
+                _leakingTicks = 0;
+                _cleanTicks = 0;
+                return false;
+            }
+            if (_baseline is null)
+            {
+                _baseline = new HashSet<int>(ports);
+                return false;
+            }
+            if (_baseline.IsSupersetOf(ports))
+            {
+                _leakingTicks = 0;
+                _cleanTicks = Math.Min(_cleanTicks + 1, LeakingTicksBeforeWarning);
+                if (_cleanTicks == LeakingTicksBeforeWarning)
+                {
+                    _reported = false;
+                }
+                return false;
+            }
+            _cleanTicks = 0;
+            _leakingTicks = Math.Min(_leakingTicks + 1, LeakingTicksBeforeWarning);
+            if (_leakingTicks < LeakingTicksBeforeWarning || _reported)
+            {
+                return false;
+            }
+            _reported = true;
+            return true;
+        }
     }
 
     /// <summary>
@@ -287,6 +340,7 @@ internal sealed partial class MainForm
         internal FirewallRuleState? FirewallState { get; set; }
         internal Exception? FirewallError { get; set; }
         internal HashSet<int>? BlockedLocalPorts { get; set; }
+        internal string? ProcessIdentity { get; set; }
 
         internal bool HasVerifiedGame => ForegroundPath is not null || RunningPath is not null;
     }

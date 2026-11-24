@@ -36,6 +36,7 @@ internal sealed class VaultLoopFeed(FeedKind kind)
     internal string Read(bool checkOnline, Version installed, CancellationToken token,
         Func<string?> loadCache, Action<string> saveCache, Func<string> fetch)
     {
+        token.ThrowIfCancellationRequested();
         if (!_loaded)
         {
             _loaded = true;
@@ -58,9 +59,11 @@ internal sealed class VaultLoopFeed(FeedKind kind)
         string status = "";
         if (checkOnline)
         {
+            token.ThrowIfCancellationRequested();
             try
             {
                 var body = fetch();
+                token.ThrowIfCancellationRequested();
                 var now = DateTime.UtcNow;
                 Format(kind, body, installed, now);
                 token.ThrowIfCancellationRequested();
