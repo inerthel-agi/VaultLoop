@@ -1,6 +1,8 @@
 bin/
 obj/
 publish/
+# A build copied next to the sources for a quick test. Releases come from publish/.
+/*.exe
 AGENTS.md
 *.user
 *.suo

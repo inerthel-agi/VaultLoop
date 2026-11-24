@@ -6,7 +6,7 @@ namespace ReplayGlitchGTA;
 /// Lets a borderless window be dragged by its own chrome.
 /// </summary>
 /// <remarks>
-/// Every window here declares <see cref="FormBorderStyle.None"/> to keep the brutalist title
+/// Every window here declares <see cref="FormBorderStyle.None"/> to keep its own title
 /// bar, which also removes the caption Windows would otherwise drag. Releasing the capture and
 /// posting a non-client caption click hands the drag back to the window manager, so snapping
 /// and multi-monitor behaviour keep working as they do for a normal title bar.
