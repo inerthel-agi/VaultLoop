@@ -46,7 +46,7 @@ The timestamp server defaults to `https://timestamp.digicert.com`; override it w
 
 1. Start GTA V or GTA V Enhanced and enter the intended activity.
 2. Run `VaultLoop.exe`.
-3. Select **LAUNCH AS ADMIN** and approve the Windows prompt.
+3. Select **Launch as admin** and approve the Windows prompt.
 4. Enable no-save with the on-screen control, the keyboard shortcut, or a
    configured controller shortcut.
 5. Confirm that VaultLoop displays `ACTIVE`.
@@ -63,7 +63,7 @@ The timestamp server defaults to `https://timestamp.digicert.com`; override it w
 This replay procedure has not been validated by this audit for Cayo Perico,
 Kortz Center, or any other activity. `ACTIVE` confirms the Windows rule, not a
 failed cloud save or retained rewards. VaultLoop cannot attribute a progress
-loss to a specific cause. See **HOW TO USE** for the observation checklist.
+loss to a specific cause. See **How to use** for the observation checklist.
 
 The default keyboard shortcut is `CTRL+SHIFT+F8`. Keyboard and controller
 shortcuts trigger only while a verified GTA window is in the foreground.
@@ -72,12 +72,15 @@ A controller shortcut contains exactly two or three buttons. Hold the combinatio
 for 500 ms, then release it to toggle no-save. Xbox controllers use XInput.
 DualShock 4, DualSense, and DualSense Edge use Windows Raw Input over USB or Bluetooth.
 
-Use **HUD ON** or **HUD OFF** to control the status HUD. The choice is stored and
-restored at the next launch. The HUD appears only while a verified GTA window is
-in the foreground.
+The **Settings** card holds the shortcut, the **In-game HUD** switch,
+**Start with Windows**, the theme (**Light**, **Dark** or **OLED**) and
+**Services & diagnostics**. The HUD choice is stored and restored at the next
+launch. The HUD appears only while a verified GTA window is in the foreground.
 
-Minimizing VaultLoop hides it in the system tray. The tray menu controls the
-window, HUD, **START WITH WINDOWS**, and **EXIT & RESTORE**. Windows startup opens it in the tray.
+Closing the window asks whether to **Hide to tray** or **Exit completely**.
+Minimizing also hides VaultLoop in the system tray. The tray menu controls the
+window, HUD, **Start with Windows** and **Exit & restore**. Windows startup opens
+it in the tray.
 
 [docs/ACTIVITY_ROTATION_GUIDE.md](docs/ACTIVITY_ROTATION_GUIDE.md) describes activity
 rotation. [docs/CONTROLLER_SHORTCUT_DESIGN.md](docs/CONTROLLER_SHORTCUT_DESIGN.md)
@@ -95,7 +98,8 @@ the watchdog path, and the next launch when it finds a stale managed rule.
 
 ### Inspect the current state
 
-Open **Services & Diagnostics** from the tray menu for a timestamped local report.
+Open **Services & diagnostics** from the settings card or the tray menu for a
+timestamped local report.
 **Refresh** reads the verified game, firewall rule and IPv4/IPv6 tables again.
 Session history lists recorded events across launches, newest first. Select rows
 to include them in the preview, then use **Copy report** or **Copy events**.
@@ -154,9 +158,9 @@ File settings are stored under `%LOCALAPPDATA%\VaultLoop`.
 | --- | --- | --- |
 | `shortcut.txt` | `CTRL+SHIFT+F8` | Stores the keyboard shortcut. |
 | `controller-shortcut.txt` | Disabled | Stores the controller and its exact button combination. |
-| `theme.txt` | Light | Stores `light` or `dark`. |
+| `theme.txt` | Light | Stores `light`, `dark` or `oled`. |
 | `hud.txt` | On | Stores `on` or `off` for the status HUD. |
-| `guide-step.txt` | Step 1 | Stores the current **HOW TO USE** page. |
+| `guide-step.txt` | Step 1 | Stores the current **How to use** step. |
 | `endpoints.txt` | `192.81.241.171` | Replaces the built-in blocked set at the next launch. |
 | `activity.log` | Empty | Written by VaultLoop. Records the last 400 firewall decisions and failures. |
 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\VaultLoop` | Absent | Starts the current executable with `--startup`. |
@@ -192,7 +196,7 @@ when an entry is invalid or outside those allocations.
   baseline, reused local ports, and connections between readings can escape detection.
 - A total power loss can prevent immediate cleanup. The next launch checks for a
   stale managed rule and attempts to remove it.
-- Moving `VaultLoop.exe` after enabling **START WITH WINDOWS** leaves the stored
+- Moving `VaultLoop.exe` after enabling **Start with Windows** leaves the stored
   registry command pointing to the old path. Disable and re-enable the option.
 - Controllers not exposed through the supported XInput or Sony Raw Input paths
   are not configurable.

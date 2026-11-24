@@ -1,6 +1,29 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
+
+- The window is redesigned and more compact. The no-save switch and its status
+  are on the left. Every setting is on the right: the shortcut, the in-game HUD,
+  **Start with Windows**, the theme and **Services & diagnostics**. The last two
+  were previously only in the tray menu.
+- Three themes: **Light**, **Dark** and **OLED**, which uses true black.
+  `theme.txt` stores `oled` for it. An older VaultLoop reading `oled` opens in
+  the light theme.
+- The in-game HUD stays discreet while saves go through. It turns into a solid
+  block of the state color when no-save is active.
+- The tray menu shows the current state in a card at the top.
+- The **How to use** guide fits on one screen. It scrolls only when the screen
+  is too short for it.
+- Closing the window asks whether to **Hide to tray** or **Exit completely**.
+  Alt+F4 and the taskbar ask the same question. **Exit & restore** in the tray
+  menu still exits directly.
+- Switches, state colors, hovers, notifications and the HUD use short
+  animations. They follow the Windows animation setting.
+- Fixed: two notifications in a row overlapped. The newer one now replaces the
+  older one.
+- Fixed: the **How to use** steps could not be reached with Tab or the arrow
+  keys until one had been clicked.
+- Fixed: the no-save switch showed no focus outline when reached with Tab.
 
 - Open **Services & Diagnostics** from the tray to see when VaultLoop last
   checked the verified game, the Windows Firewall rule and the IPv4 and IPv6
