@@ -2,13 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace ReplayGlitchGTA;
 
 /// <summary>
 /// The workflow guide: the steps on the left, the one being followed on the right, and the
-/// limits and warnings under it. Everything is on screen at once; nothing scrolls.
+/// limits and warnings under it. Everything is on screen at once, unless the screen is too
+/// short for it: the content then scrolls under a fixed title bar.
 /// </summary>
 internal sealed class GuideDialog : ThemedDialog
 {
@@ -77,6 +79,7 @@ internal sealed class GuideDialog : ThemedDialog
     private readonly SoftButton _previous;
     private readonly SoftButton _next;
     private int _currentStep = 1;
+    private Panel? _scroller;
 
     internal GuideDialog(bool darkMode) :
         base("HOW TO USE NO-SAVE", new Size(DialogWidth, 520), darkMode)
@@ -152,15 +155,76 @@ internal sealed class GuideDialog : ThemedDialog
         SetCurrentStep(GuideProgressSettings.Load(), persist: false);
     }
 
+    protected override void OnShown(EventArgs e)
+    {
+        var workingArea = Screen.FromControl(Owner ?? this).WorkingArea;
+        FitToHeight(workingArea.Height - LogicalToDeviceUnits(24));
+        // Keep the whole window on that screen once it may have been shortened.
+        Top = Math.Max(workingArea.Top, Math.Min(Top, workingArea.Bottom - Height));
+        base.OnShown(e);
+    }
+
+    /// <summary>
+    /// Shortens the window to <paramref name="available"/> pixels when it is taller, and
+    /// moves everything under the title bar into a scrolling panel so every card and the
+    /// "Got it" button stay reachable. At full height nothing changes.
+    /// </summary>
+    internal void FitToHeight(int available)
+    {
+        if (Height <= available || _scroller is not null)
+        {
+            return;
+        }
+
+        var titleBar = Controls.OfType<Panel>().First(panel => panel.Dock == DockStyle.Top);
+        var scroller = new Panel
+        {
+            Name = "GuideScroller",
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            BackColor = BackColor,
+            AutoScrollMinSize = new Size(0, ClientSize.Height - titleBar.Height)
+        };
+        ControlFactory.WithThemedScrollBars(scroller, DarkMode);
+        // The cards are painted by whatever holds the content, at its scroll position.
+        scroller.Paint += (_, paint) => PaintCards(paint.Graphics, new Point(
+            scroller.AutoScrollPosition.X, scroller.AutoScrollPosition.Y - titleBar.Height));
+
+        SuspendLayout();
+        foreach (var control in Controls.Cast<Control>().Where(c => c != titleBar).ToArray())
+        {
+            control.Top -= titleBar.Height;
+            scroller.Controls.Add(control);
+        }
+        Controls.Add(scroller);
+        // Docking runs from the back of the z-order: the title bar must dock before the fill.
+        scroller.BringToFront();
+        _scroller = scroller;
+        Height = available;
+        ResumeLayout();
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        if (_scroller is null)
+        {
+            PaintCards(e.Graphics, Point.Empty);
+        }
+    }
+
+    private void PaintCards(Graphics graphics, Point offset)
+    {
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
         var surface = Role(Palette.Surface);
-        MenuGlyphs.DrawCard(e.Graphics, _detailCard, surface, Role(Palette.Line));
+        var detail = _detailCard;
+        detail.Offset(offset);
+        MenuGlyphs.DrawCard(graphics, detail, surface, Role(Palette.Line));
         foreach (var (bounds, accent) in _noteCards)
         {
-            MenuGlyphs.DrawCard(e.Graphics, bounds,
+            var note = bounds;
+            note.Offset(offset);
+            MenuGlyphs.DrawCard(graphics, note,
                 Palette.Mix(surface, accent, 0.16), Palette.Mix(surface, accent, 0.45));
         }
     }
