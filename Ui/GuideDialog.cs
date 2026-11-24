@@ -1,288 +1,353 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace ReplayGlitchGTA;
 
-internal sealed class GuideDialog : BrutalistDialog
+/// <summary>
+/// The workflow guide: the steps on the left, the one being followed on the right, and the
+/// limits and warnings under it. Everything is on screen at once, unless the screen is too
+/// short for it: the content then scrolls under a fixed title bar.
+/// </summary>
+internal sealed class GuideDialog : ThemedDialog
 {
     /// <summary>The workflow, in order. Step numbers, layout, and progress all derive from it.</summary>
     private static readonly (string Title, string Description)[] Steps =
     [
         ("START THE ACTIVITY",
-            "Launch a high-value mission or heist: Cayo Perico, Kortz Center, Diamond Casino, Doomsday, Dr. Dre, or another activity."),
+            "Enter the activity you intend to test. This replay workflow has not been validated by this audit."),
         ("ENABLE NO-SAVE",
-            "Activate no-save as soon as the activity starts. Keep it active until the activity has been completed."),
+            "Enable no-save and check ACTIVE. This confirms the Windows rule, not that cloud saves fail."),
         ("COMPLETE THE ACTIVITY",
-            "Avoid failing if you want the Elite Challenge and its bonus. A failure normally removes only the associated bonus."),
+            "Observe the save messages and activity result in GTA. VaultLoop cannot verify rewards or replay availability."),
         ("RETURN TO STORY MODE",
             "After a successful completion, leave GTA Online and wait until Story Mode has fully loaded."),
         ("DISABLE NO-SAVE",
             "Disable no-save and verify that the application clearly displays INACTIVE before continuing."),
-        ("RETURN TO GTA ONLINE",
-            "Rejoin GTA Online. The reward should remain available while the activity can generally be replayed.")
+        ("JOIN A PRIVATE SESSION",
+            "If continuing the test, use Invite Only or Friends Only. Changing sessions does not guarantee a reset."),
+        ("CHECK THE SAVE RESULT",
+            "With no-save INACTIVE, check GTA's save result. An outfit change or Alt+F4 does not guarantee a save."),
+        ("CHECK BEFORE REPLAY",
+            "Check your progress and activity availability before continuing. Rejoining does not guarantee replay.")
     ];
+
+    /// <summary>
+    /// The notes under the current step. The first line is the title; the line breaks after
+    /// it were set for a wider column and are reflowed.
+    /// </summary>
+    private static readonly (string Text, Color Accent)[] Notes =
+    [
+        ("REPLAY — VALIDATION LIMITS\n" +
+         "This audit does not validate a replay procedure for Cayo Perico, Kortz Center,\n" +
+         "or any other activity. A session cycle does not guarantee retained progress.\n" +
+         "An ACTIVE rule is not proof that a cloud save failed.\n" +
+         "If progress changes, its cause is not established by this tool.\n" +
+         "Check the in-game result before attempting another activity.", Palette.Yellow),
+        ("TIP — COOLDOWN\n" +
+         "Follow the availability shown in GTA. No fixed delay guarantees replay or retained progress.",
+            Palette.Blue),
+        ("WARNING — USE AT YOUR OWN RISK\n" +
+         "Online exploits may cause progress loss, transaction rollback, suspension, or account sanctions. " +
+         "VaultLoop cannot guarantee an outcome.", Palette.AlertRed)
+    ];
+
+    private const int DialogWidth = 760;
+    private const int Edge = 20;
+    private const int ContentTop = 114;
+    private const int ListWidth = 290;
+    private const int RowHeight = 34;
+    private const int RowPitch = 37;
+    private const int DetailLeft = Edge + ListWidth + 12;
+    private const int DetailWidth = DialogWidth - Edge - DetailLeft;
+    private const int CardPadding = 14;
 
     /// <summary>The number of steps stored progress is validated against.</summary>
     internal static int StepCount => Steps.Length;
 
     private readonly GuideStepPanel[] _steps = new GuideStepPanel[Steps.Length];
+    private readonly List<(Rectangle Bounds, Color Accent)> _noteCards = new();
+    // Tall enough for a description that wraps onto a third line.
+    private readonly Rectangle _detailCard = new(DetailLeft, ContentTop, DetailWidth, 122);
     private readonly Label _currentStepLabel;
-    private readonly Panel _scrollPanel;
-    private readonly Button _closeButton;
-    private readonly bool _darkMode;
+    private readonly Label _detailKicker;
+    private readonly Label _detailTitle;
+    private readonly Label _detailBody;
+    private readonly SoftButton _previous;
+    private readonly SoftButton _next;
+    private int _currentStep = 1;
+    private Panel? _scroller;
 
     internal GuideDialog(bool darkMode) :
-        base("HOW TO USE NO-SAVE", GetGuideSize(), darkMode ? Palette.DarkCanvas : Palette.Paper)
+        base("HOW TO USE NO-SAVE", new Size(DialogWidth, 520), darkMode)
     {
-        _darkMode = darkMode;
-        var canvas = darkMode ? Palette.DarkCanvas : Palette.Paper;
-        var textColor = darkMode ? Palette.Paper : Palette.Ink;
-        Controls.Add(new Label
-        {
-            Text = "VAULTLOOP WORKFLOW",
-            Bounds = new Rectangle(28, 58, 350, 38),
-            BackColor = canvas,
-            ForeColor = textColor,
-            Font = Typography.GuideTitle
-        });
-        Controls.Add(new Label
-        {
-            Text = "Click a step to mark your current position.",
-            Bounds = new Rectangle(30, 93, 390, 22),
-            BackColor = canvas,
-            ForeColor = textColor,
-            Font = Typography.GuideHint
-        });
-        _currentStepLabel = new Label
-        {
-            Bounds = new Rectangle(520, 68, 168, 34),
-            BackColor = Palette.Acid,
-            ForeColor = Palette.Ink,
-            Font = Typography.CompactMono,
-            TextAlign = ContentAlignment.MiddleCenter
-        };
+        var textColor = ForeColor;
+        var muted = Role(Palette.Muted);
+        Controls.Add(ControlFactory.MakeLabel(
+            "VaultLoop workflow", new Rectangle(Edge - 2, 50, 380, 34),
+            Typography.WindowHeading, BackColor, textColor));
+        Controls.Add(ControlFactory.MakeLabel(
+            "Click a step to mark your current position.", new Rectangle(Edge, 84, 400, 20),
+            Typography.MenuDetail, BackColor, muted));
+        _currentStepLabel = ControlFactory.MakeLabel(
+            "", new Rectangle(DialogWidth - Edge - 150, 58, 150, 28),
+            Typography.MenuCaption, Role(Palette.Control), textColor,
+            ContentAlignment.MiddleCenter);
         Controls.Add(_currentStepLabel);
-
-        var scrollPanel = new Panel
-        {
-            Bounds = new Rectangle(28, 120, 664 + SystemInformation.VerticalScrollBarWidth, 526),
-            AutoScroll = true,
-            AutoScrollMinSize = new Size(0, 666),
-            BackColor = canvas,
-            TabStop = false
-        };
-        _scrollPanel = scrollPanel;
-        Controls.Add(scrollPanel);
 
         for (var index = 0; index < Steps.Length; index++)
         {
-            var stepNumber = index + 1;
-            var (title, description) = Steps[index];
-            var panel = BuildStep(stepNumber, title, description,
-                new Rectangle(0, index * 64, 664, 56), darkMode);
-            void SelectStep(object? sender, EventArgs eventArgs)
-            {
-                panel.Focus();
-                SetCurrentStep(stepNumber, persist: true);
-            }
-
-            foreach (Control child in panel.Controls)
-            {
-                child.Click += SelectStep;
-            }
-            panel.Click += SelectStep;
-            var stepIndex = index;
-            panel.KeyDown += (_, eventArgs) =>
-            {
-                if (eventArgs.KeyCode is Keys.Enter or Keys.Space)
-                {
-                    SetCurrentStep(stepNumber, persist: true);
-                    eventArgs.Handled = true;
-                }
-                else if (eventArgs.KeyCode is Keys.Down or Keys.Right &&
-                         stepIndex < Steps.Length - 1)
-                {
-                    _steps[stepIndex + 1].Focus();
-                    SetCurrentStep(stepIndex + 2, persist: true);
-                    eventArgs.Handled = true;
-                }
-                else if (eventArgs.KeyCode is Keys.Up or Keys.Left && stepIndex > 0)
-                {
-                    _steps[stepIndex - 1].Focus();
-                    SetCurrentStep(stepIndex, persist: true);
-                    eventArgs.Handled = true;
-                }
-            };
-            panel.Enter += (_, _) => panel.Invalidate();
-            panel.Leave += (_, _) => panel.Invalidate();
-            panel.Paint += (_, eventArgs) =>
-            {
-                if (panel.Focused)
-                {
-                    ControlPaint.DrawFocusRectangle(eventArgs.Graphics,
-                        Rectangle.Inflate(panel.ClientRectangle, -4, -4));
-                }
-            };
-            _steps[index] = panel;
-            scrollPanel.Controls.Add(panel);
+            _steps[index] = BuildStep(index);
+            Controls.Add(_steps[index]);
         }
 
-        scrollPanel.Controls.Add(new Label
+        var navigationTop = ContentTop + Steps.Length * RowPitch + 5;
+        var navigationWidth = (ListWidth - 8) / 2;
+        _previous = ControlFactory.MakeButton(
+            "PREVIOUS", new Rectangle(Edge, navigationTop, navigationWidth, 32),
+            Typography.MenuCaption, Role(Palette.Control), textColor);
+        _previous.AccessibleName = "Mark the previous step as current";
+        _previous.Click += (_, _) => SetCurrentStep(_currentStep - 1, persist: true);
+        _next = ControlFactory.MakeButton(
+            "NEXT STEP",
+            new Rectangle(Edge + navigationWidth + 8, navigationTop, navigationWidth, 32),
+            Typography.MenuCaption, Role(Palette.Control), textColor);
+        _next.AccessibleName = "Mark the next step as current";
+        _next.Click += (_, _) => SetCurrentStep(_currentStep + 1, persist: true);
+        Controls.AddRange([_previous, _next]);
+
+        var innerLeft = DetailLeft + CardPadding;
+        var innerWidth = DetailWidth - 2 * CardPadding;
+        _detailKicker = ControlFactory.MakeLabel(
+            "", new Rectangle(innerLeft, ContentTop + 10, innerWidth, 18),
+            Typography.MenuCaption, Color.Transparent, muted);
+        _detailTitle = ControlFactory.MakeLabel(
+            "", new Rectangle(innerLeft - 1, ContentTop + 28, innerWidth, 26),
+            Typography.CardHeading, Color.Transparent, textColor);
+        _detailBody = new Label
         {
-            Text = "BONUS — CAYO PERICO / KORTZ CENTER HEIST\n" +
-                   "After your first Cayo Perico or Kortz Center replay glitch, repeating it resets the heist.\n" +
-                   "Money is kept, but loot is lost. The 144-minute cooldown applies only to a different loot target.\n" +
-                   "This is intentional Rockstar Games behavior, not a bug.\n" +
-                   "Not affected: Cluckin' Bell, The Titan Job, Avi Schwartzman Missions,\n" +
-                   "Casino, Doomsday, and other classic heists.",
-            Bounds = new Rectangle(0, 390, 664, 118),
-            BackColor = Palette.Yellow,
-            ForeColor = Palette.Ink,
-            Font = Typography.SmallBold,
-            Padding = new Padding(14, 9, 14, 9)
-        });
-        scrollPanel.Controls.Add(new Label
+            Bounds = new Rectangle(innerLeft, ContentTop + 56, innerWidth, 56),
+            Font = Typography.MenuBody,
+            BackColor = Color.Transparent,
+            ForeColor = textColor
+        };
+        Controls.AddRange([_detailKicker, _detailTitle, _detailBody]);
+
+        var top = _detailCard.Bottom + 8;
+        foreach (var (text, accent) in Notes)
         {
-            Text = "TIP — COOLDOWN\n" +
-                   "144 minutes only when changing the Cayo Perico loot target. " +
-                   "Other activities use different timers.",
-            Bounds = new Rectangle(0, 518, 664, 48),
-            BackColor = Palette.Blue,
-            ForeColor = Palette.Ink,
-            Font = Typography.SmallBold,
-            Padding = new Padding(14, 6, 14, 6)
-        });
-        scrollPanel.Controls.Add(new Label
-        {
-            Text = "WARNING — USE AT YOUR OWN RISK\n" +
-                   "Online exploits may cause progress loss, transaction rollback, suspension, or account sanctions. " +
-                   "The perceived risk may be low, but no method is completely risk-free.",
-            Bounds = new Rectangle(0, 576, 664, 78),
-            BackColor = Palette.AlertRed,
-            ForeColor = Palette.Ink,
-            Font = Typography.StatusDetail,
-            Padding = new Padding(14, 9, 14, 9)
-        });
-        var closeButton = BrutalistControls.CreateOutlinedButton(
-            "GOT IT", new Rectangle(582, 654, 110, 36), Typography.StatusDetail,
-            Palette.Ink, Palette.Paper);
+            top = AddNote(text, accent, top, innerLeft, innerWidth) + 8;
+        }
+
+        var bottom = Math.Max(top - 8, navigationTop + 32);
+        var closeButton = ControlFactory.MakeButton(
+            "GOT IT", new Rectangle(DialogWidth - Edge - 110, bottom + 14, 110, 34),
+            Typography.MenuCaption, Palette.Blue, Palette.Ink);
         closeButton.Click += (_, _) => { DialogResult = DialogResult.OK; Close(); };
-        _closeButton = closeButton;
         Controls.Add(closeButton);
         AcceptButton = closeButton;
         CancelButton = closeButton;
+        ClientSize = new Size(DialogWidth, closeButton.Bottom + 16);
+
         SetCurrentStep(GuideProgressSettings.Load(), persist: false);
     }
 
     protected override void OnShown(EventArgs e)
     {
         var workingArea = Screen.FromControl(Owner ?? this).WorkingArea;
-        var dpiScale = DeviceDpi / 96F;
-        var maximumWidth = Math.Max(320, (int)(workingArea.Width * 0.9));
-        var maximumHeight = Math.Max(320, (int)(workingArea.Height * 0.9));
-        ClientSize = new Size(
-            Math.Min((int)Math.Round(720 * dpiScale), maximumWidth),
-            Math.Min((int)Math.Round(700 * dpiScale), maximumHeight));
-        LayoutContent();
-        CenterToParent();
+        FitToHeight(workingArea.Height - LogicalToDeviceUnits(24));
+        // Keep the whole window on that screen once it may have been shortened.
+        Top = Math.Max(workingArea.Top, Math.Min(Top, workingArea.Bottom - Height));
         base.OnShown(e);
     }
 
     /// <summary>
-    /// Places the scrolling area and the close button against the client size the window
-    /// actually got.
+    /// Shortens the window to <paramref name="available"/> pixels when it is taller, and
+    /// moves everything under the title bar into a scrolling panel so every card and the
+    /// "Got it" button stay reachable. At full height nothing changes.
     /// </summary>
-    /// <remarks>
-    /// The window is clamped to 90 % of the working area, but its content was laid out against
-    /// the unclamped 720 x 700 design size. On a display whose working area is shorter than
-    /// about 700 logical pixels — a 1366 x 768 laptop, or 1080p at a high scaling factor — the
-    /// GOT IT button ended up below the bottom edge and out of reach. At the design size this
-    /// reproduces the original geometry exactly.
-    /// </remarks>
-    private void LayoutContent()
+    internal void FitToHeight(int available)
     {
-        var sideMargin = LogicalToDeviceUnits(28);
-        var bottomMargin = LogicalToDeviceUnits(10);
-        var gap = LogicalToDeviceUnits(8);
-        _closeButton.Location = new Point(
-            ClientSize.Width - _closeButton.Width - sideMargin,
-            ClientSize.Height - _closeButton.Height - bottomMargin);
-        _scrollPanel.Size = new Size(
-            ClientSize.Width - (2 * sideMargin) + SystemInformation.VerticalScrollBarWidth,
-            Math.Max(
-                LogicalToDeviceUnits(120),
-                _closeButton.Top - _scrollPanel.Top - gap));
+        if (Height <= available || _scroller is not null)
+        {
+            return;
+        }
+
+        var titleBar = Controls.OfType<Panel>().First(panel => panel.Dock == DockStyle.Top);
+        var scroller = new Panel
+        {
+            Name = "GuideScroller",
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            BackColor = BackColor,
+            AutoScrollMinSize = new Size(0, ClientSize.Height - titleBar.Height)
+        };
+        ControlFactory.WithThemedScrollBars(scroller, DarkMode);
+        // The cards are painted by whatever holds the content, at its scroll position.
+        scroller.Paint += (_, paint) => PaintCards(paint.Graphics, new Point(
+            scroller.AutoScrollPosition.X, scroller.AutoScrollPosition.Y - titleBar.Height));
+
+        SuspendLayout();
+        foreach (var control in Controls.Cast<Control>().Where(c => c != titleBar).ToArray())
+        {
+            control.Top -= titleBar.Height;
+            scroller.Controls.Add(control);
+        }
+        Controls.Add(scroller);
+        // Docking runs from the back of the z-order: the title bar must dock before the fill.
+        scroller.BringToFront();
+        _scroller = scroller;
+        Height = available;
+        ResumeLayout();
     }
 
-    private static Size GetGuideSize()
+    protected override void OnPaint(PaintEventArgs e)
     {
-        var workingHeight = Screen.PrimaryScreen?.WorkingArea.Height ?? 768;
-        return new Size(720, Math.Min(700, Math.Max(520, (int)(workingHeight * 0.9))));
+        base.OnPaint(e);
+        if (_scroller is null)
+        {
+            PaintCards(e.Graphics, Point.Empty);
+        }
     }
 
-    private static GuideStepPanel BuildStep(
-        int number, string title, string description, Rectangle bounds,
-        bool darkMode)
+    private void PaintCards(Graphics graphics, Point offset)
     {
-        var neutral = darkMode ? Palette.DarkSurface : Palette.GuideNeutral;
-        var textColor = darkMode ? Palette.Paper : Palette.Ink;
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        var surface = Role(Palette.Surface);
+        var detail = _detailCard;
+        detail.Offset(offset);
+        MenuGlyphs.DrawCard(graphics, detail, surface, Role(Palette.Line));
+        foreach (var (bounds, accent) in _noteCards)
+        {
+            var note = bounds;
+            note.Offset(offset);
+            MenuGlyphs.DrawCard(graphics, note,
+                Palette.Mix(surface, accent, 0.16), Palette.Mix(surface, accent, 0.45));
+        }
+    }
+
+    /// <summary>Adds one note card under the previous one and returns its bottom edge.</summary>
+    private int AddNote(string text, Color accent, int top, int left, int width)
+    {
+        var lines = text.Split('\n');
+        var body = string.Join(" ", lines, 1, lines.Length - 1);
+        var bodyHeight = TextRenderer.MeasureText(
+            body, Typography.MenuDetail, new Size(width, int.MaxValue),
+            TextFormatFlags.WordBreak).Height + 2;
+
+        Controls.Add(ControlFactory.MakeLabel(
+            DisplayText.Sentence(lines[0]), new Rectangle(left, top + 9, width, 18),
+            Typography.MenuCaption, Color.Transparent, ForeColor));
+        Controls.Add(new Label
+        {
+            Text = body,
+            Bounds = new Rectangle(left, top + 28, width, bodyHeight),
+            Font = Typography.MenuDetail,
+            BackColor = Color.Transparent,
+            ForeColor = ForeColor
+        });
+
+        var card = new Rectangle(DetailLeft, top, DetailWidth, 28 + bodyHeight + 10);
+        _noteCards.Add((card, accent));
+        return card.Bottom;
+    }
+
+    private GuideStepPanel BuildStep(int index)
+    {
+        var stepNumber = index + 1;
+        var (title, description) = Steps[index];
         var panel = new GuideStepPanel
         {
-            Bounds = bounds,
-            BackColor = neutral,
-            BorderStyle = BorderStyle.FixedSingle,
+            Bounds = new Rectangle(Edge, ContentTop + index * RowPitch, ListWidth, RowHeight),
+            BackColor = BackColor,
             Cursor = Cursors.Hand,
             TabStop = true,
             AccessibleRole = AccessibleRole.RadioButton,
-            AccessibleName = $"Step {number}: {title}",
+            AccessibleName = $"Step {stepNumber}: {title}",
             AccessibleDescription = description,
             AccessibleDefaultActionDescription = "Mark as current step"
         };
         panel.Controls.Add(new Label
         {
-            Text = number.ToString("00"),
-            Bounds = new Rectangle(0, 0, 58, 60),
-            BackColor = Palette.Yellow,
-            ForeColor = Palette.Ink,
-            Font = Typography.AccentTitle,
-            TextAlign = ContentAlignment.MiddleCenter,
+            Text = stepNumber.ToString("00"),
+            Bounds = new Rectangle(10, 0, 30, RowHeight),
+            BackColor = Color.Transparent,
+            ForeColor = Role(Palette.Muted),
+            Font = Typography.MenuCaption,
+            TextAlign = ContentAlignment.MiddleLeft,
             Cursor = Cursors.Hand
         });
         panel.Controls.Add(new Label
         {
-            Text = title,
-            Bounds = new Rectangle(72, 4, 565, 20),
-            BackColor = panel.BackColor,
-            ForeColor = textColor,
-            Font = Typography.GuideStepTitle,
+            Text = DisplayText.Sentence(title),
+            Bounds = new Rectangle(44, 0, ListWidth - 52, RowHeight),
+            BackColor = Color.Transparent,
+            ForeColor = ForeColor,
+            Font = Typography.MenuBody,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
             Cursor = Cursors.Hand
         });
-        panel.Controls.Add(new Label
+
+        void SelectStep(object? sender, EventArgs eventArgs)
         {
-            Text = description,
-            Bounds = new Rectangle(72, 23, 576, 30),
-            BackColor = panel.BackColor,
-            ForeColor = textColor,
-            Font = Typography.GuideStepBody,
-            Cursor = Cursors.Hand
-        });
+            panel.Focus();
+            SetCurrentStep(stepNumber, persist: true);
+        }
+        foreach (Control child in panel.Controls)
+        {
+            child.Click += SelectStep;
+        }
+        panel.Click += SelectStep;
+        panel.KeyDown += (_, eventArgs) =>
+        {
+            if (eventArgs.KeyCode is Keys.Enter or Keys.Space)
+            {
+                SetCurrentStep(stepNumber, persist: true);
+                eventArgs.Handled = true;
+            }
+            else if (eventArgs.KeyCode is Keys.Down or Keys.Right && index < Steps.Length - 1)
+            {
+                _steps[index + 1].Focus();
+                SetCurrentStep(stepNumber + 1, persist: true);
+                eventArgs.Handled = true;
+            }
+            else if (eventArgs.KeyCode is Keys.Up or Keys.Left && index > 0)
+            {
+                _steps[index - 1].Focus();
+                SetCurrentStep(stepNumber - 1, persist: true);
+                eventArgs.Handled = true;
+            }
+        };
         return panel;
     }
 
     private void SetCurrentStep(int step, bool persist)
     {
-        _currentStepLabel.Text = $"CURRENT STEP  {step} / {Steps.Length}";
+        step = Math.Max(1, Math.Min(Steps.Length, step));
+        _currentStep = step;
+        _currentStepLabel.Text =
+            DisplayText.Sentence($"CURRENT STEP  {step} / {Steps.Length}");
+        var surface = Role(Palette.Surface);
         for (var index = 0; index < _steps.Length; index++)
         {
             var isCurrent = index == step - 1;
             _steps[index].IsCurrent = isCurrent;
             _steps[index].SetStepColors(
-                isCurrent
-                    ? Palette.Acid
-                    : _darkMode ? Palette.DarkSurface : Palette.GuideNeutral,
-                isCurrent || !_darkMode ? Palette.Ink : Palette.Paper);
+                isCurrent ? Palette.Mix(surface, Palette.Blue, 0.24) : surface,
+                Role(Palette.Text));
         }
+
+        var (title, description) = Steps[step - 1];
+        _detailKicker.Text = DisplayText.Sentence($"STEP {step:00}");
+        _detailTitle.Text = DisplayText.Sentence(title);
+        _detailBody.Text = description;
+        _previous.Enabled = step > 1;
+        _next.Enabled = step < Steps.Length;
+
         if (persist)
         {
             try

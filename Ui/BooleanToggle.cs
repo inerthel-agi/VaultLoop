@@ -1,14 +1,19 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
 namespace ReplayGlitchGTA;
 
 internal sealed class BooleanToggle : Control
 {
+    private readonly AnimatedFloat _position;
+    private readonly AnimatedFloat _colorBlend;
     private bool _checked;
     private bool _isStateKnown = true;
     private bool _isRecoveryMode;
+    private Color _fromTrack = Palette.Acid;
+    private Color _toTrack = Palette.Acid;
 
     internal bool IsRecoveryMode
     {
@@ -24,7 +29,7 @@ internal sealed class BooleanToggle : Control
                 ? "Restore firewall rule"
                 : Checked ? "Disable no-save" : "Enable no-save";
             AccessibilityNotifyClients(AccessibleEvents.StateChange, -1);
-            Invalidate();
+            AnimateToState();
         }
     }
 
@@ -42,7 +47,7 @@ internal sealed class BooleanToggle : Control
                 ? (Checked ? "Disable no-save" : "Enable no-save")
                 : "State unavailable";
             AccessibilityNotifyClients(AccessibleEvents.StateChange, -1);
-            Invalidate();
+            AnimateToState();
         }
     }
 
@@ -58,7 +63,7 @@ internal sealed class BooleanToggle : Control
             _checked = value;
             AccessibleDefaultActionDescription = value ? "Disable no-save" : "Enable no-save";
             AccessibilityNotifyClients(AccessibleEvents.StateChange, -1);
-            Invalidate();
+            AnimateToState();
         }
     }
 
@@ -66,9 +71,13 @@ internal sealed class BooleanToggle : Control
 
     internal BooleanToggle()
     {
+        _position = new AnimatedFloat(this, 0F, Invalidate);
+        _colorBlend = new AnimatedFloat(this, 1F, Invalidate);
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                  ControlStyles.ResizeRedraw | ControlStyles.UserPaint |
-                 ControlStyles.Selectable, true);
+                 ControlStyles.Selectable | ControlStyles.SupportsTransparentBackColor, true);
+        // The track is rounded; the card behind it shows through the corners.
+        BackColor = Color.Transparent;
         TabStop = true;
         Cursor = Cursors.Hand;
         AccessibleRole = AccessibleRole.CheckButton;
@@ -78,55 +87,101 @@ internal sealed class BooleanToggle : Control
     protected override AccessibleObject CreateAccessibilityInstance() =>
         new BooleanToggleAccessibleObject(this);
 
+    protected override void OnEnabledChanged(EventArgs e)
+    {
+        base.OnEnabledChanged(e);
+        AnimateToState();
+    }
+
+    /// <summary>The track color on screen: on its way from the previous state's to this one's.</summary>
+    private Color DisplayedTrack => Palette.Mix(_fromTrack, _toTrack, _colorBlend.Value);
+
+    /// <summary>
+    /// Slides the knob to the current position and lets the track color settle into the
+    /// current state's. Purely visual: the state itself changed before this was called.
+    /// </summary>
+    private void AnimateToState()
+    {
+        var target = GetTrackColor(Enabled, IsStateKnown, IsRecoveryMode, Checked);
+        if (target != _toTrack)
+        {
+            _fromTrack = DisplayedTrack;
+            _toTrack = target;
+            _colorBlend.AnimateFrom(0F, 1F, Motion.Standard);
+        }
+        _position.AnimateTo(Checked ? 1F : 0F, Motion.Standard);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        var track = new Rectangle(2, 2, Width - 12, Height - 12);
-        var shadow = new Rectangle(track.X + 8, track.Y + 8, track.Width, track.Height);
-        var knobWidth = 94;
+        const TextFormatFlags Centered =
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+            TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+        var graphics = e.Graphics;
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+        var track = new Rectangle(0, 0, Width, Height);
+        const int Inset = 6;
+        var knobWidth = Width * 3 / 8;
+        var position = _position.Value;
         var knob = new Rectangle(
-            Checked ? track.Right - knobWidth - 8 : track.X + 8,
-            track.Y + 8, knobWidth, track.Height - 16);
-        var labelArea = Checked
-            ? new Rectangle(track.X + 8, track.Y, track.Width - knobWidth - 22, track.Height)
-            : new Rectangle(track.X + knobWidth + 14, track.Y, track.Width - knobWidth - 22, track.Height);
+            Inset + (int)Math.Round((Width - knobWidth - 2 * Inset) * position),
+            Inset, knobWidth, Height - 2 * Inset);
+        // The label sits on the side the knob is leaving, and fades through the middle.
+        var showsOn = position >= 0.5F;
+        var labelArea = showsOn
+            ? new Rectangle(0, 0, knob.X, Height)
+            : new Rectangle(knob.Right, 0, Width - knob.Right, Height);
+        var trackColor = DisplayedTrack;
 
-        using var shadowBrush = new SolidBrush(Palette.Ink);
-        using var trackBrush = new SolidBrush(
-            GetTrackColor(Enabled, IsStateKnown, IsRecoveryMode, Checked));
-        using var knobBrush = new SolidBrush(Palette.Paper);
-        using var borderPen = new Pen(Palette.Ink, 4F);
-        var labelFont = Typography.StatusTitle;
-        var knobFont = Typography.CompactMono;
+        using (var trackShape = MenuGlyphs.RoundedRectangle(track, 12F))
+        using (var trackBrush = new SolidBrush(trackColor))
+        {
+            graphics.FillPath(trackBrush, trackShape);
+        }
 
-        e.Graphics.FillRectangle(shadowBrush, shadow);
-        e.Graphics.FillRectangle(trackBrush, track);
-        e.Graphics.DrawRectangle(borderPen, track);
+        var labelFont = Typography.ToggleLabel;
         if (IsRecoveryMode)
         {
-            TextRenderer.DrawText(e.Graphics, "RESTORE", labelFont, track, Palette.Ink,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(graphics, "Restore", labelFont, track, Palette.Ink, Centered);
         }
         else if (!IsStateKnown)
         {
-            TextRenderer.DrawText(e.Graphics, "STATE ?", labelFont, track, Palette.Ink,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            TextRenderer.DrawText(graphics, "State ?", labelFont, track, Palette.Ink, Centered);
         }
         else
         {
-            e.Graphics.FillRectangle(knobBrush, knob);
-            e.Graphics.DrawRectangle(borderPen, knob);
-            TextRenderer.DrawText(e.Graphics, Checked ? "ON" : "OFF", labelFont, labelArea, Palette.Ink,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-            TextRenderer.DrawText(e.Graphics, "NO-SAVE", knobFont, knob, Palette.Ink,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            using (var knobShape = MenuGlyphs.RoundedRectangle(knob, 8F))
+            {
+                graphics.FillPath(Brushes.White, knobShape);
+            }
+            TextRenderer.DrawText(graphics, showsOn ? "On" : "Off", labelFont, labelArea,
+                Palette.Mix(trackColor, Palette.Ink, Math.Abs(2F * position - 1F)), Centered);
+            TextRenderer.DrawText(graphics, "No-save", Typography.MenuCaption, knob,
+                Palette.Ink, Centered);
         }
 
         if (Focused)
         {
-            var focus = Rectangle.Inflate(track, -7, -7);
-            ControlPaint.DrawFocusRectangle(e.Graphics, focus, Palette.Ink, Checked ? Palette.HotPink : Palette.Acid);
+            using var ring = new Pen(Palette.Ink, 2F);
+            using var ringShape = MenuGlyphs.RoundedRectangle(
+                new RectangleF(3, 3, Width - 6, Height - 6), 9F);
+            graphics.DrawPath(ring, ringShape);
         }
+    }
+
+    // The focus ring is part of the painting, so it has to follow the focus.
+    protected override void OnGotFocus(EventArgs e)
+    {
+        base.OnGotFocus(e);
+        Invalidate();
+    }
+
+    protected override void OnLostFocus(EventArgs e)
+    {
+        base.OnLostFocus(e);
+        Invalidate();
     }
 
     protected override void OnClick(EventArgs e)

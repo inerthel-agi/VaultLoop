@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -14,6 +15,8 @@ internal static class NativeMethods
     internal const uint LowerIntegrityInjectedFlag = 0x02;
     internal const uint InjectedFlag = 0x10;
     internal const uint AltDownFlag = 0x20;
+    internal const int SystemCommandMessage = 0x0112;
+    internal const int CloseCommand = 0xF060;
     internal const int NonClientLeftButtonDown = 0x00A1;
     internal const int HitCaption = 0x0002;
 
@@ -25,6 +28,9 @@ internal static class NativeMethods
 
     private const int ParentProcessConsole = -1;
     private const int LoadLibrarySearchSystem32 = 0x00000800;
+    private const int WindowCornerPreference = 33;
+    private const int WindowBorderColor = 34;
+    private const int RoundedCorners = 2;
 
     /// <summary>
     /// Removes the executable's own directory from the DLL search path, so imported modules
@@ -60,6 +66,55 @@ internal static class NativeMethods
     /// when the process was started without a console.
     /// </summary>
     internal static void AttachParentConsole() => AttachConsole(ParentProcessConsole);
+
+    /// <summary>
+    /// Asks the compositor to round a borderless window and to draw its one-pixel border,
+    /// which is how Windows 11 shapes its own menus. Returns false where the attribute is
+    /// unknown (Windows 10): the window stays square and the caller draws its own border.
+    /// </summary>
+    internal static bool TryRoundCorners(IntPtr windowHandle, Color border)
+    {
+        var preference = RoundedCorners;
+        if (DwmSetWindowAttribute(
+                windowHandle, WindowCornerPreference, ref preference, sizeof(int)) != 0)
+        {
+            return false;
+        }
+
+        var colorReference = border.R | border.G << 8 | border.B << 16;
+        DwmSetWindowAttribute(windowHandle, WindowBorderColor, ref colorReference, sizeof(int));
+        return true;
+    }
+
+    /// <summary>
+    /// Whether Windows shows animations (Settings > Accessibility > Visual effects). A failed
+    /// query counts as yes: the animations are short and decorative.
+    /// </summary>
+    internal static bool ClientAreaAnimationEnabled()
+    {
+        const int GetClientAreaAnimation = 0x1042;
+        var enabled = true;
+        return !SystemParametersInfo(GetClientAreaAnimation, 0, ref enabled, 0) || enabled;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SystemParametersInfo(
+        int action, int parameter, ref bool value, int update);
+
+    /// <summary>
+    /// Gives a control's native scroll bars the system's dark or light look. A list or a
+    /// text box otherwise keeps light scroll bars on a dark window.
+    /// </summary>
+    internal static void ThemeScrollBars(IntPtr windowHandle, bool dark) =>
+        SetWindowTheme(windowHandle, dark ? "DarkMode_Explorer" : "Explorer", null);
+
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(
+        IntPtr windowHandle, string? subAppName, string? subIdList);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(
+        IntPtr windowHandle, int attribute, ref int value, int size);
 
     internal delegate IntPtr LowLevelKeyboardProcedure(
         int code, IntPtr wordParameter, IntPtr longParameter);
