@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Open **Services & Diagnostics** from the tray to see when VaultLoop last
+  checked the verified game, the Windows Firewall rule and the IPv4 and IPv6
+  connection tables. The panel and `--diagnose` distinguish an incomplete read
+  from a successful read with zero connections.
+- Review up to 400 timestamped events across sessions, newest first. **Copy
+  events** copies the selected rows. **Copy report** copies the preview, which
+  omits local paths, raw IP addresses, device identifiers and exception text.
+- In **Online services**, **Check for updates** compares the installed version
+  with the latest stable GitHub release and links to its notes. **Refresh
+  notices** shows compatibility advisories for the installed version, with
+  verification dates and references. The Rockstar link opens the official PC
+  service status page or copies its URL when VaultLoop runs as administrator.
+- Online checks run on request. Offline, VaultLoop shows the last successful
+  check with its UTC timestamp and flags expired catalogs. A bundled catalog
+  covers the first launch. Closing the panel cancels pending checks, including
+  those still waiting to start.
+
 ## 1.3.0
 
 - Clarified the replay guidance for Cayo Perico and Kortz Center Heist. Repeating

@@ -76,6 +76,8 @@ internal sealed partial class MainForm
             var enable = !StartupRegistration.IsEnabled(Application.ExecutablePath);
             StartupRegistration.SetEnabled(Application.ExecutablePath, enable);
             _trayMenu?.SetStartupEnabled(enable);
+            _startupSwitch.SwitchOn = enable;
+            _startupSwitch.Text = StartupSwitchText(enable);
         }
         catch (Exception exception)
         {

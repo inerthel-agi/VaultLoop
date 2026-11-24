@@ -406,6 +406,8 @@ internal static class SelfTest
                        tray.HudText == "HUD  //  OFF" &&
                        tray.StartupText == "START WITH WINDOWS  //  ON" &&
                        tray.OpenEnabled && !tray.HideEnabled &&
+                       tray.Items["TrayOpen"]!.Available &&
+                       !tray.Items["TrayHide"]!.Available &&
                        exitItems.Length == 1 &&
                        exitItems[0].Text.Replace("&&", "&") == "EXIT & RESTORE";
             });
@@ -463,6 +465,51 @@ internal static class SelfTest
                    hints[0].Text.StartsWith("Press a new combination") &&
                    dialog.TryCapture(Keys.Tab, Keys.None) ==
                        ShortcutDialog.CaptureOutcome.Ignored;
+        });
+        checks.Verify("animations jump to their end on a control that is not shown", () =>
+        {
+            using var hidden = new Control();
+            var changes = 0;
+            var value = new AnimatedFloat(hidden, 0F, () => changes++);
+            value.AnimateTo(1F, Motion.Standard);
+            using var toggle = new BooleanToggle();
+            toggle.Checked = true;
+            return value.Value == 1F && changes == 1 &&
+                   Motion.Ease(0F) == 0F && Motion.Ease(1F) == 1F && Motion.Ease(0.5F) > 0.5F;
+        });
+        checks.Verify("the OLED theme turns the dark surfaces black and leaves light alone", () =>
+        {
+            var black = Color.FromArgb(0, 0, 0);
+            var wasOled = Palette.Oled;
+            try
+            {
+                Palette.Oled = true;
+                return Palette.Themed(Palette.Canvas, darkMode: true) == black &&
+                       Palette.MenuSurface == black &&
+                       Palette.Themed(Palette.Canvas, darkMode: false) == Palette.Canvas &&
+                       Palette.Themed(Palette.Blue, darkMode: true) == Palette.Blue;
+            }
+            finally
+            {
+                Palette.Oled = wasOled;
+            }
+        });
+        checks.Verify("closing offers the tray or a full exit, and changes nothing by default", () =>
+        {
+            using var dialog = new CloseChoiceDialog(darkMode: true, noSaveActive: true);
+            var untouched = dialog.Choice == CloseChoice.Cancel;
+            var warned = dialog.Controls.Find("CloseActiveWarning", true).Length == 1;
+            var trayIsDefault = dialog.AcceptButton == dialog.Controls["CloseToTray"];
+            dialog.Show();
+            ((Button)dialog.Controls["CloseExit"]!).PerformClick();
+            using var quiet = new CloseChoiceDialog(darkMode: false, noSaveActive: false);
+            return untouched && warned && trayIsDefault && dialog.Choice == CloseChoice.Exit &&
+                   quiet.Controls.Find("CloseActiveWarning", true).Length == 0;
+        });
+        checks.Verify("a guide step can take the keyboard focus", () =>
+        {
+            using var step = new GuideStepPanel();
+            return step.CanSelect;
         });
         checks.Verify("the shortcut dialog exposes disabled controller configuration",
             () =>
@@ -548,6 +595,76 @@ internal static class SelfTest
             var read = GameConnectionInspector.ReadConnections(42, Read);
             return !read.Complete && read.Ipv4Error!.Contains("synthetic read failure") &&
                    read.Ipv6Error!.Contains("synthetic read failure");
+        });
+
+        checks.Verify("a preexisting connection never triggers the runtime alert", () =>
+        {
+            var state = new MainForm.BlockObservationState();
+            return !state.Observe(FirewallRuleState.Active, "42:100", [5000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [5000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [5000]);
+        });
+        checks.Verify("missing observations preserve the baseline but break confirmation", () =>
+        {
+            var state = new MainForm.BlockObservationState();
+            return !state.Observe(FirewallRuleState.Active, "42:100", [5000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [5000, 6000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", null) &&
+                   !state.Observe(FirewallRuleState.Active, null, null) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [5000, 6000]) &&
+                   state.Observe(FirewallRuleState.Active, "42:100", [5000, 6000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [5000, 6000]);
+        });
+        checks.Verify("two complete clean observations rearm a recurrent alert", () =>
+        {
+            var state = new MainForm.BlockObservationState();
+            return !state.Observe(FirewallRuleState.Active, "42:100", []) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [6000]) &&
+                   state.Observe(FirewallRuleState.Active, "42:100", [6000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", []) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", null) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", []) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [6000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [6000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", []) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", []) &&
+                   !state.Observe(FirewallRuleState.Active, "42:100", [6000]) &&
+                   state.Observe(FirewallRuleState.Active, "42:100", [6000]);
+        });
+        checks.Verify("a different process lifetime starts a fresh complete baseline", () =>
+        {
+            var state = new MainForm.BlockObservationState();
+            return !state.Observe(FirewallRuleState.Active, "42:100", [5000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:200", null) &&
+                   !state.Observe(FirewallRuleState.Active, "42:200", [6000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:200", [6000]) &&
+                   !state.Observe(FirewallRuleState.Active, "42:200", [7000]) &&
+                   state.Observe(FirewallRuleState.Active, "42:200", [7000]);
+        });
+        checks.Verify("inactive, invalid and unknown rule states discard old baselines", () =>
+        {
+            foreach (var ruleState in new FirewallRuleState?[]
+                     { FirewallRuleState.Inactive, FirewallRuleState.Invalid, null })
+            {
+                var state = new MainForm.BlockObservationState();
+                state.Observe(FirewallRuleState.Active, "42:100", [5000]);
+                if (state.Observe(ruleState, "42:100", null) ||
+                    state.Observe(FirewallRuleState.Active, "42:100", [6000]) ||
+                    state.Observe(FirewallRuleState.Active, "42:100", [6000]))
+                {
+                    return false;
+                }
+            }
+            return true;
+        });
+        checks.Verify("a baseline owns its data instead of aliasing a later snapshot", () =>
+        {
+            var ports = new HashSet<int> { 5000 };
+            var state = new MainForm.BlockObservationState();
+            state.Observe(FirewallRuleState.Active, "42:100", ports);
+            ports.Add(6000);
+            return !state.Observe(FirewallRuleState.Active, "42:100", ports) &&
+                   state.Observe(FirewallRuleState.Active, "42:100", ports);
         });
 
         checks.Verify("a snapshot of an established blocked connection is not a confirmed leak", () =>
@@ -636,6 +753,48 @@ internal static class SelfTest
                    Show(new Version(1, 2, 5), today).Contains("Patch notice") &&
                    Show(new Version(8, 0, 0), today).Contains("No entries") &&
                    Show(installed, today.AddYears(5)).Contains("EXPIRED");
+        });
+        checks.Verify("closing cancels pending feed work before the next I/O step", () =>
+        {
+            for (var stage = 0; stage < 3; stage++)
+            {
+                using var closing = new System.Threading.CancellationTokenSource();
+                var reads = 0;
+                var requests = 0;
+                var writes = 0;
+                if (stage == 0) closing.Cancel();
+                try
+                {
+                    new VaultLoopFeed(FeedKind.Release).Read(true, installed, closing.Token,
+                        () => { reads++; if (stage == 1) closing.Cancel(); return null; },
+                        _ => writes++, () => { requests++; closing.Cancel(); return validRelease; });
+                    return false;
+                }
+                catch (OperationCanceledException) when (closing.IsCancellationRequested)
+                {
+                    if (reads != (stage == 0 ? 0 : 1) || requests != (stage == 2 ? 1 : 0) || writes != 0)
+                        return false;
+                }
+            }
+            return true;
+        });
+        checks.Verify("a cached catalog survives a restart, a network failure and malformed JSON", () =>
+        {
+            const string saved = "2020-01-01T01:02:03.0000000Z\n" +
+                """{"schema":1,"validThrough":"2020-02-01","notices":[]}""";
+            var feed = new VaultLoopFeed(FeedKind.Compatibility);
+            var writes = 0;
+            var reads = 0;
+            string Read(bool online, Func<string> fetch) => feed.Read(online, installed, default,
+                () => { reads++; return saved; }, _ => writes++, fetch);
+            var requests = 0;
+            var offline = Read(false, () => { requests++; return ""; });
+            var interrupted = Read(true, () => throw new System.Net.WebException());
+            var malformed = Read(true, () => "{");
+            return reads == 1 && requests == 0 && writes == 0 &&
+                   offline.Contains("2020-01-01 01:02:03Z") && offline.Contains("EXPIRED") &&
+                   interrupted.Contains("unsuccessful") && interrupted.EndsWith(offline, StringComparison.Ordinal) &&
+                   malformed == interrupted;
         });
         checks.Verify("invalid advisories preserve the bundled fallback and never enable an external link", () =>
         {

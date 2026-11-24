@@ -3,7 +3,7 @@ using System.Windows.Forms;
 
 namespace ReplayGlitchGTA;
 
-internal sealed class ShortcutDialog : BrutalistDialog
+internal sealed class ShortcutDialog : ThemedDialog
 {
     private const string CaptureHint =
         "Press a new combination. Use a modifier, or a function key.";
@@ -13,6 +13,7 @@ internal sealed class ShortcutDialog : BrutalistDialog
     private readonly Button _capturedButton;
     private readonly Label _keyboardHint;
     private readonly Color _hintColor;
+    private readonly Color _rejectedColor;
     private readonly Button _controllerCaptureButton;
     private readonly Button _configureControllerButton;
     private readonly Label _controllerHint;
@@ -28,8 +29,7 @@ internal sealed class ShortcutDialog : BrutalistDialog
         Keys modifiers, Keys key, bool darkMode,
         ControllerShortcutService? controllerService = null,
         ControllerShortcut? controllerShortcut = null) :
-        base("CONFIGURE SHORTCUT", new Size(520, 500),
-            darkMode ? Palette.DarkCanvas : Palette.Yellow)
+        base("CONFIGURE SHORTCUT", new Size(520, 326), darkMode)
     {
         ShortcutModifiers = modifiers;
         ShortcutKey = key;
@@ -41,77 +41,84 @@ internal sealed class ShortcutDialog : BrutalistDialog
         // dialog listens instead; navigation keys are still left to the dialog.
         KeyPreview = true;
         KeyDown += CaptureShortcut;
-        var canvas = darkMode ? Palette.DarkCanvas : Palette.Yellow;
-        var textColor = darkMode ? Palette.Paper : Palette.Ink;
+        var canvas = BackColor;
+        var textColor = ForeColor;
+        var muted = Role(Palette.Muted);
+        // The pink is fine on the dark canvas and too pale to read on the light one.
+        _rejectedColor = darkMode
+            ? Palette.HotPink
+            : Palette.Mix(Palette.AlertRed, Palette.Ink, 0.25);
 
         Controls.Add(new Label
         {
-            Text = "KEYBOARD SHORTCUT",
-            Bounds = new Rectangle(28, 58, 460, 34),
-            Font = Typography.DialogHeading,
+            Text = "Keyboard shortcut",
+            Bounds = new Rectangle(19, 50, 460, 26),
+            Font = Typography.CardHeading,
             BackColor = canvas,
             ForeColor = textColor
         });
-        _hintColor = textColor;
+        _hintColor = muted;
         _keyboardHint = new Label
         {
             Text = CaptureHint,
-            Bounds = new Rectangle(30, 96, 460, 28),
+            Bounds = new Rectangle(21, 76, 478, 20),
+            Font = Typography.MenuDetail,
             BackColor = canvas,
-            ForeColor = textColor
+            ForeColor = muted
         };
         _keyboardHint.Name = "KeyboardShortcutHint";
         Controls.Add(_keyboardHint);
 
-        _capturedButton = BrutalistControls.CreateOutlinedButton(
-            ShortcutSettings.Format(modifiers, key), new Rectangle(30, 128, 460, 48),
-            Typography.StatusDetail, darkMode ? Palette.DarkSurface : Palette.Paper,
-            darkMode ? Palette.Paper : Palette.Ink);
+        var captured = ControlFactory.MakeButton(
+            ShortcutSettings.Format(modifiers, key), new Rectangle(20, 100, 384, 40),
+            Typography.ShortcutCapture, Role(Palette.Surface), textColor);
+        captured.Verbatim = true;
+        _capturedButton = captured;
         _capturedButton.Name = "ShortcutCapture";
         _capturedButton.AccessibleName = "Keyboard shortcut capture field";
         _capturedButton.AccessibleDescription =
             "Press the shortcut you want to use anywhere in this dialog.";
-        _capturedButton.Font = Typography.ShortcutCapture;
         Controls.Add(_capturedButton);
 
         Controls.Add(new Label
         {
-            Text = "CONTROLLER SHORTCUT",
-            Bounds = new Rectangle(28, 194, 460, 34),
-            Font = Typography.DialogHeading,
+            Text = "Controller shortcut",
+            Bounds = new Rectangle(19, 150, 460, 26),
+            Font = Typography.CardHeading,
             BackColor = canvas,
             ForeColor = textColor
         });
         Controls.Add(new Label
         {
             Text = "Hold an exact combination of 2 or 3 buttons, then release all buttons.",
-            Bounds = new Rectangle(30, 232, 460, 32),
+            Bounds = new Rectangle(21, 176, 478, 20),
+            Font = Typography.MenuDetail,
             BackColor = canvas,
-            ForeColor = textColor
+            ForeColor = muted
         });
 
-        _controllerCaptureButton = BrutalistControls.CreateOutlinedButton(
+        var controllerCapture = ControlFactory.MakeButton(
             ControllerShortcut?.Format() ?? "NOT CONFIGURED",
-            new Rectangle(30, 270, 460, 56), Typography.StatusDetail,
-            darkMode ? Palette.DarkSurface : Palette.Paper,
-            darkMode ? Palette.Paper : Palette.Ink);
+            new Rectangle(20, 200, 280, 40), Typography.MenuCaption,
+            Role(Palette.Surface), textColor);
+        controllerCapture.Verbatim = true;
+        _controllerCaptureButton = controllerCapture;
         _controllerCaptureButton.Name = "ControllerShortcutCapture";
         _controllerCaptureButton.AccessibleName = "Controller shortcut capture status";
         _controllerCaptureButton.TabStop = false;
 
-        _configureControllerButton = BrutalistControls.CreateOutlinedButton(
+        _configureControllerButton = ControlFactory.MakeButton(
             ControllerShortcut is null ? "CONFIGURE" : "REPLACE",
-            new Rectangle(30, 340, 180, 38), Typography.StatusDetail,
-            Palette.Acid, Palette.Ink);
+            new Rectangle(308, 200, 112, 40), Typography.MenuCaption,
+            Palette.Blue, Palette.Ink);
         _configureControllerButton.Name = "ConfigureControllerShortcut";
         _configureControllerButton.AccessibleName = "Configure controller shortcut";
         _configureControllerButton.Enabled = controllerService is not null;
         _configureControllerButton.Click += (_, _) => ToggleControllerCapture();
 
-        var clearControllerButton = BrutalistControls.CreateOutlinedButton(
-            "CLEAR", new Rectangle(220, 340, 100, 38), Typography.StatusDetail,
-            darkMode ? Palette.DarkSurface : Palette.Paper,
-            darkMode ? Palette.Paper : Palette.Ink);
+        var clearControllerButton = ControlFactory.MakeButton(
+            "CLEAR", new Rectangle(428, 200, 72, 40), Typography.MenuCaption,
+            Role(Palette.Control), textColor);
         clearControllerButton.AccessibleName = "Clear controller shortcut";
         clearControllerButton.Enabled = ControllerShortcut is not null;
 
@@ -122,9 +129,10 @@ internal sealed class ShortcutDialog : BrutalistDialog
                 : ControllerShortcut is null
                     ? "Controller shortcut disabled until configured."
                     : "This controller toggles no-save ON or OFF.",
-            Bounds = new Rectangle(30, 390, 460, 28),
+            Bounds = new Rectangle(21, 244, 478, 20),
+            Font = Typography.MenuDetail,
             BackColor = canvas,
-            ForeColor = textColor
+            ForeColor = muted
         };
         clearControllerButton.Click += (_, _) =>
         {
@@ -175,17 +183,16 @@ internal sealed class ShortcutDialog : BrutalistDialog
                 "In GTA, hold 0.5 s to toggle ON or OFF. Click SAVE to apply.";
         };
 
-        var secondaryColor = darkMode ? Palette.DarkSurface : Palette.Paper;
-        var secondaryText = darkMode ? Palette.Paper : Palette.Ink;
-        var resetButton = BrutalistControls.CreateOutlinedButton(
-            "RESET", new Rectangle(30, 438, 86, 36), Typography.StatusDetail,
-            secondaryColor, secondaryText);
-        var saveButton = BrutalistControls.CreateOutlinedButton(
-            "SAVE", new Rectangle(310, 438, 84, 36), Typography.StatusDetail,
-            Palette.Acid, Palette.Ink);
-        var cancelButton = BrutalistControls.CreateOutlinedButton(
-            "CANCEL", new Rectangle(404, 438, 86, 36), Typography.StatusDetail,
-            secondaryColor, secondaryText);
+        var secondaryColor = Role(Palette.Control);
+        var resetButton = ControlFactory.MakeButton(
+            "RESET", new Rectangle(412, 100, 88, 40), Typography.MenuCaption,
+            secondaryColor, textColor);
+        var saveButton = ControlFactory.MakeButton(
+            "SAVE", new Rectangle(414, 276, 86, 34), Typography.MenuCaption,
+            Palette.Blue, Palette.Ink);
+        var cancelButton = ControlFactory.MakeButton(
+            "CANCEL", new Rectangle(322, 276, 84, 34), Typography.MenuCaption,
+            secondaryColor, textColor);
         resetButton.Click += (_, _) =>
         {
             (ShortcutModifiers, ShortcutKey) = ShortcutSettings.Default;
@@ -261,7 +268,7 @@ internal sealed class ShortcutDialog : BrutalistDialog
         if (!IsValidShortcut(capturedModifiers, key))
         {
             _keyboardHint.Text = RejectedHint;
-            _keyboardHint.ForeColor = Palette.HotPink;
+            _keyboardHint.ForeColor = _rejectedColor;
             return CaptureOutcome.Rejected;
         }
 

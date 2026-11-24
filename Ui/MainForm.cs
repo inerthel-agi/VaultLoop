@@ -13,7 +13,6 @@ internal sealed partial class MainForm : Form
 {
     private readonly FirewallService? _firewall;
     private readonly BooleanToggle _toggle;
-    private readonly Label _stateKicker;
     private readonly Label _stateTitle;
     private readonly Label _stateDetail;
     private readonly System.Windows.Forms.Timer _refreshTimer;
@@ -23,13 +22,20 @@ internal sealed partial class MainForm : Form
     private readonly GlobalHotkeyHook _hotkeyHook;
     private readonly ControllerShortcutService _controllerShortcutService;
     private readonly MiniHudForm? _miniHud;
-    private readonly Button _shortcutBadge;
-    private readonly Button _shortcutFooter;
-    private readonly Button _themeButton;
-    private readonly Button _hudVisibilityButton;
+    private readonly SoftButton _shortcutBadge;
+    private readonly SoftButton[] _themeButtons;
+    private readonly SoftButton _hudVisibilityButton;
+    private readonly SoftButton _startupSwitch;
     private readonly Label _gameStatusLabel;
     private readonly ThemeController _themeController;
     private Color _stateColor = Palette.Acid;
+    private Color _fromStateColor = Palette.Acid;
+    private readonly AnimatedFloat _stateBlend;
+    private CloudMark _stateMark = CloudMark.Unknown;
+    private Color _gameStatusColor = Palette.HotPink;
+    private bool _roundedByCompositor;
+    private bool _closeChoiceOpen;
+    private bool _exitWarningShown;
 
     // Read from the keyboard hook thread through the _canTrigger delegate, written on the UI
     // thread. Without volatile the hook can observe a stale value, swallow the keystroke, and
@@ -37,6 +43,7 @@ internal sealed partial class MainForm : Form
     private volatile bool _applying;
     private volatile bool _stateKnown = true;
 
+    private AppTheme _theme;
     private bool _darkMode;
     private bool _hudEnabled;
     private bool _hasVerifiedForegroundGame;
@@ -49,6 +56,9 @@ internal sealed partial class MainForm : Form
         bool previewState = false, bool previewUnknown = false)
     {
         _firewall = firewall;
+        // One pixel wider than the card: its antialiased edge spills onto the next column.
+        _stateBlend = new AnimatedFloat(
+            this, 1F, () => Invalidate(Rectangle.Inflate(StatusCard, 1, 1), true));
         _previewMode = previewMode;
         _isAdministrator = _previewMode || Program.IsRunningAsAdministrator();
         _logoImage = LoadLogo();
@@ -63,20 +73,21 @@ internal sealed partial class MainForm : Form
             () => _isAdministrator && !_applying && _stateKnown);
         _controllerShortcutService.Pressed += HandleHotkeyPressed;
         _controllerShortcutService.Refused += HandleHotkeyRefused;
-        _darkMode = ThemeSettings.Load();
+        _theme = ThemeSettings.Load();
+        _darkMode = _theme != AppTheme.Light;
+        Palette.Oled = _theme == AppTheme.Oled;
         // Preview mode has no HUD to show, and reading the preference there would make the
         // rendered window depend on it. It keeps the default instead.
         _hudEnabled = _previewMode || HudSettings.Load();
 
         var chrome = BuildLayout();
         _shortcutBadge = chrome.ShortcutBadge;
-        _themeButton = chrome.ThemeButton;
+        _themeButtons = chrome.ThemeButtons;
         _toggle = chrome.Toggle;
-        _stateKicker = chrome.StateKicker;
         _stateTitle = chrome.StateTitle;
         _stateDetail = chrome.StateDetail;
-        _shortcutFooter = chrome.ShortcutFooter;
         _hudVisibilityButton = chrome.HudVisibilityButton;
+        _startupSwitch = chrome.StartupSwitch;
         _gameStatusLabel = chrome.GameStatusLabel;
         _miniHud = _previewMode ? null : new MiniHudForm();
         if (!_previewMode)
@@ -98,10 +109,10 @@ internal sealed partial class MainForm : Form
                 HideToTray();
             }
         };
-        _themeController = new ThemeController(
-            this, _themeButton, [_stateKicker, _stateTitle, _stateDetail, _toggle]);
+        _themeController = new ThemeController(this, [_toggle, .. _themeButtons]);
         _themeController.CaptureThemeColors();
         _themeController.ApplyTheme(_darkMode);
+        ShowSelectedTheme();
 
         if (_previewMode)
         {
@@ -125,6 +136,7 @@ internal sealed partial class MainForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+        ApplyWindowEdge();
         if (!_previewMode)
         {
             _hotkeyRegistered = _hotkeyHook.Install();
@@ -179,21 +191,98 @@ internal sealed partial class MainForm : Form
                 _controllerShortcutService.ProcessRawInputDeviceChange(
                     message.LParam, message.WParam.ToInt32());
             }
+            else if (message.Msg == NativeMethods.SystemCommandMessage &&
+                     (message.WParam.ToInt64() & 0xFFF0) == NativeMethods.CloseCommand)
+            {
+                // Alt+F4 and the taskbar's "Close window" get the same question as the button.
+                RequestClose();
+                return;
+            }
         }
         base.WndProc(ref message);
+    }
+
+    /// <summary>
+    /// The user asked to close the window: offer the tray, a full exit, or nothing. Code
+    /// that calls <see cref="Form.Close"/> itself — the tray's exit, the relaunch as
+    /// administrator — has already decided and does not come through here.
+    /// </summary>
+    private void RequestClose()
+    {
+        if (_previewMode)
+        {
+            Close();
+            return;
+        }
+        if (_closeChoiceOpen)
+        {
+            return;
+        }
+
+        var noSaveActive = _firewallState == FirewallRuleState.Active;
+        CloseChoice choice;
+        _closeChoiceOpen = true;
+        try
+        {
+            using var dialog = new CloseChoiceDialog(_darkMode, noSaveActive);
+            dialog.ShowDialog(this);
+            choice = dialog.Choice;
+        }
+        finally
+        {
+            _closeChoiceOpen = false;
+        }
+
+        if (choice == CloseChoice.HideToTray)
+        {
+            HideToTray();
+        }
+        else if (choice == CloseChoice.Exit)
+        {
+            // The dialog showed the active-state warning, so the closing handler skips its own.
+            _exitWarningShown = noSaveActive;
+            try
+            {
+                Close();
+            }
+            finally
+            {
+                _exitWarningShown = false;
+            }
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        e.Graphics.SmoothingMode = SmoothingMode.None;
-        DrawCard(e.Graphics, HeaderCard, Palette.Yellow, Palette.Ink);
-        DrawCard(e.Graphics, BodyCard,
-            _darkMode ? Palette.DarkSurface : Palette.Paper, Palette.Blue);
-        DrawCard(e.Graphics, StatusCard, _stateColor, Palette.Ink);
-        DrawCard(e.Graphics, FooterCard, Palette.Ink, Palette.Blue);
-        using var borderPen = new Pen(Palette.Ink, 3F);
-        e.Graphics.DrawRectangle(borderPen, 1, 1, ClientSize.Width - 3, ClientSize.Height - 3);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        var surface = Palette.Themed(Palette.Surface, _darkMode);
+        var line = Palette.Themed(Palette.Line, _darkMode);
+        MenuGlyphs.DrawCard(e.Graphics, ControlCard, surface, line);
+        MenuGlyphs.DrawCard(e.Graphics, SettingsCard, surface, line);
+        MenuGlyphs.DrawCard(e.Graphics, FooterCard, surface, line);
+        DrawStatusCard(e.Graphics, surface);
+        using (var dot = new SolidBrush(ReadableAccent(_gameStatusColor)))
+        {
+            e.Graphics.FillEllipse(dot, GameStatusDot);
+        }
+
+        if (!_roundedByCompositor)
+        {
+            using var borderPen = new Pen(line);
+            e.Graphics.DrawRectangle(
+                borderPen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+        }
+    }
+
+    /// <summary>Rounded corners and the window edge, in the current theme's line color.</summary>
+    private void ApplyWindowEdge()
+    {
+        if (IsHandleCreated)
+        {
+            _roundedByCompositor = NativeMethods.TryRoundCorners(
+                Handle, Palette.Themed(Palette.Line, _darkMode));
+        }
     }
 
     internal void SavePreview(string path)
@@ -329,11 +418,11 @@ internal sealed partial class MainForm : Form
 
     private void SetGameStatus(string text, Color color)
     {
-        _gameStatusLabel.Text = text;
-        // Keep the footer black and use the status color for the text. In particular,
-        // WAITING FOR GTA is the red warning that no verified GTA process is running.
-        _gameStatusLabel.BackColor = Palette.Ink;
-        _gameStatusLabel.ForeColor = GetGameStatusTextColor(text, color);
+        _gameStatusLabel.Text = DisplayText.Sentence(text);
+        // The status color goes to the dot beside the text. In particular, WAITING FOR GTA
+        // is the red warning that no verified GTA process is running.
+        _gameStatusColor = GetGameStatusTextColor(text, color);
+        Invalidate(FooterCard);
         UpdateToggleAvailability();
     }
 
@@ -370,7 +459,6 @@ internal sealed partial class MainForm : Form
             _hotkeyHook.Shortcut = (newModifiers, newKey);
             _controllerShortcutService.Shortcut = dialog.ControllerShortcut;
             _shortcutBadge.Text = ShortcutText;
-            _shortcutFooter.Text = $"{ShortcutText}  //  GTA ONLY";
         }
         catch (Exception exception)
         {
@@ -408,6 +496,7 @@ internal sealed partial class MainForm : Form
     {
         _hudEnabled = !_hudEnabled;
         _hudVisibilityButton.Text = _hudEnabled ? "HUD ON" : "HUD OFF";
+        _hudVisibilityButton.SwitchOn = _hudEnabled;
         _hudVisibilityButton.AccessibleName =
             _hudEnabled ? "Hide the no-save HUD" : "Show the no-save HUD";
         _trayMenu?.SetHudEnabled(_hudEnabled);
@@ -449,13 +538,24 @@ internal sealed partial class MainForm : Form
         bool hudEnabled, bool hasVerifiedForegroundGame) =>
         hudEnabled && hasVerifiedForegroundGame;
 
-    private void ToggleTheme()
+    private void SetTheme(AppTheme theme)
     {
-        _darkMode = !_darkMode;
+        if (theme == _theme)
+        {
+            return;
+        }
+
+        _theme = theme;
+        _darkMode = theme != AppTheme.Light;
+        Palette.Oled = theme == AppTheme.Oled;
         _themeController.ApplyTheme(_darkMode);
+        ShowSelectedTheme();
+        ApplyWindowEdge();
+        // The HUD is never light, but it does follow the OLED black.
+        _miniHud?.RefreshTheme();
         try
         {
-            ThemeSettings.Save(_darkMode);
+            ThemeSettings.Save(theme);
         }
         catch (Exception exception)
         {
@@ -520,10 +620,17 @@ internal sealed partial class MainForm : Form
                     ? $"no-save enabled from {(fromHotkey ? "shortcut" : "window")} for {gamePath}"
                     : $"no-save disabled from {(fromHotkey ? "shortcut" : "window")}");
                 SetDisplayedState(enabled);
-                if (fromHotkey)
+                if (enabled)
                 {
-                    ShowStatusToast(enabled ? "NO-SAVE ACTIVE" : "NO-SAVE INACTIVE",
-                        enabled ? Palette.HotPink : Palette.Acid);
+                    if (fromHotkey)
+                    {
+                        ShowStatusToast("NO-SAVE ACTIVE", Palette.HotPink);
+                    }
+                }
+                else
+                {
+                    ShowStatusToast("NO-SAVE INACTIVE", Palette.Acid,
+                        "Check the save result in GTA. Replay outcomes are not verified by VaultLoop.");
                 }
             },
             exception => ReportMutationFailure(exception, fromHotkey));
@@ -720,6 +827,10 @@ internal sealed partial class MainForm : Form
 
     private void SetDisplayedState(bool enabled)
     {
+        if (!enabled)
+        {
+            _blockObservation.Reset();
+        }
         _stateKnown = true;
         _firewallState = enabled ? FirewallRuleState.Active : FirewallRuleState.Inactive;
         _toggle.IsRecoveryMode = false;
@@ -736,6 +847,7 @@ internal sealed partial class MainForm : Form
 
     private void SetInvalidState()
     {
+        _blockObservation.Reset();
         _stateKnown = true;
         _firewallState = FirewallRuleState.Invalid;
         _toggle.IsStateKnown = false;
@@ -748,6 +860,7 @@ internal sealed partial class MainForm : Form
 
     private void SetUnknownState()
     {
+        _blockObservation.Reset();
         _stateKnown = false;
         _firewallState = FirewallRuleState.Invalid;
         _toggle.IsRecoveryMode = false;
@@ -762,19 +875,22 @@ internal sealed partial class MainForm : Form
     private void RenderStatus(
         Color color, string title, string detail, string toggleAccessibleName)
     {
+        _fromStateColor = DisplayedStateColor;
         _stateColor = color;
-        _stateKicker.BackColor = color;
-        _stateTitle.BackColor = color;
-        _stateDetail.BackColor = color;
-        _stateTitle.Text = title;
-        _stateDetail.Text = detail;
+        _stateBlend.AnimateFrom(0F, 1F, Motion.Standard);
+        _stateMark = MenuGlyphs.MarkFor(title);
+        _stateTitle.Text = DisplayText.Sentence(title);
+        _stateDetail.Text = DisplayText.Sentence(detail);
         _toggle.AccessibleName = toggleAccessibleName;
         _trayMenu?.SetStatus(title, color);
+        _trayMenu?.SetStatusDetail(detail);
         if (_trayIcon is not null)
         {
             _trayIcon.Text = $"VaultLoop - No-save {title.ToLowerInvariant()}";
         }
-        Invalidate();
+        // Children too: the HUD button paints the status card behind its rounded corners,
+        // and would keep the previous state's tint there.
+        Invalidate(true);
     }
 
     /// <summary>
@@ -806,9 +922,25 @@ internal sealed partial class MainForm : Form
         return firewallState != FirewallRuleState.Inactive || hasVerifiedRunningGame;
     }
 
+    private static StatusToastForm? _activeToast;
+
+    /// <summary>
+    /// Shows one toast at a time. They all open in the same corner, so a second one used to
+    /// land exactly on the first and the two read as one garbled message.
+    /// </summary>
     private static void ShowStatusToast(string title, Color color, string? detail = null)
     {
+        _activeToast?.Close();
         var toast = new StatusToastForm(title, detail ?? "", color);
+        toast.FormClosed += (_, _) =>
+        {
+            if (ReferenceEquals(_activeToast, toast))
+            {
+                _activeToast = null;
+            }
+            toast.Dispose();
+        };
+        _activeToast = toast;
         toast.Show();
     }
 
@@ -821,7 +953,7 @@ internal sealed partial class MainForm : Form
         }
 
         if (eventArgs.CloseReason == CloseReason.UserClosing &&
-            _firewallState == FirewallRuleState.Active)
+            _firewallState == FirewallRuleState.Active && !_exitWarningShown)
         {
             var closeAnswer = MessageBox.Show(this,
                 "No-save is ACTIVE.\nClosing the application will restore the Rockstar link.\n\nClose now?",
