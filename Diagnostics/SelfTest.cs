@@ -506,6 +506,19 @@ internal static class SelfTest
             return untouched && warned && trayIsDefault && dialog.Choice == CloseChoice.Exit &&
                    quiet.Controls.Find("CloseActiveWarning", true).Length == 0;
         });
+        checks.Verify("the guide fits a short screen and keeps every control reachable", () =>
+        {
+            using var guide = new GuideDialog(darkMode: true);
+            var fullHeight = guide.Height;
+            var closeButton = guide.AcceptButton as Control;
+            guide.FitToHeight(fullHeight + 10);
+            var untouched = guide.Height == fullHeight && guide.Controls["GuideScroller"] is null;
+            guide.FitToHeight(400);
+            return untouched && guide.Height == 400 &&
+                   guide.Controls["GuideScroller"] is ScrollableControl scroller &&
+                   scroller.AutoScroll && closeButton?.Parent == scroller &&
+                   scroller.AutoScrollMinSize.Height >= closeButton.Bottom;
+        });
         checks.Verify("a guide step can take the keyboard focus", () =>
         {
             using var step = new GuideStepPanel();
